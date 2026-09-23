@@ -80,7 +80,7 @@ Exposes Prempti as a NixOS / home-manager service. Linux only (x86_64, aarch64).
 | `signoff.enable` | `false` | Hold every `ask` for a hardware-key (FIDO2) sign-off; requires `audit.enable` |
 | `signoff.ttlSecs` | `300` | Held calls are denied after this; hook timeout derived from it |
 | `signoff.rpId` / `requireUv` | `prempti.local` / `false` | Relying-party id; require PIN/biometric, not just touch |
-| `signoff.keysFile` | `null` | `config/signoff_keys.json` from `premptictl signoff enroll` (public keys only); required when enabled |
+| `signoff.keysFile` | `null` | `config/signoff_keys.json` to install (public keys only); `null` = `premptictl signoff enroll` owns the file in place |
 | `supervisor.logRotateBytes` | `10485760` | |
 | `supervisor.logRotateKeep` | `3` | |
 | `supervisor.stopTimeoutSecs` | `20` | |
@@ -140,17 +140,20 @@ services.prempti = {
   signoff = {
     enable = true;
     ttlSecs = 300;
-    keysFile = ./signoff_keys.json;   # from `premptictl signoff enroll`
+    # keysFile = ./signoff_keys.json;  # optional: pin the enrolled keys in Nix
   };
 };
 # hidraw access to the key for your user:
 services.udev.packages = [ pkgs.libfido2 ];
 ```
 
-Enrolment needs a running service only for the config file: run
-`premptictl signoff enroll --label desk` once (touch the key), copy the
-resulting `~/.prempti/config/signoff_keys.json` next to your Nix config and
-point `keysFile` at it. From then on every `ask` verdict, whether from a
+Enrol before (or right after) enabling: `premptictl signoff enroll --label
+desk` writes `~/.prempti/config/signoff_keys.json` (touch the key; no
+running service needed). With `keysFile` unset that file is the source of
+truth and rebuilds leave it alone; the service only refuses to start while
+sign-off is enabled and nothing is enrolled yet. Set `keysFile` to a copy
+if you want the enrolment pinned in your Nix config instead. From then on
+every `ask` verdict, whether from a
 Falco rule or the LLM monitor, parks the tool call: Claude Code waits, and
 `premptictl signoff list` / `signoff watch` show what is pending.
 `premptictl signoff approve <seq>` signs the call's audit record hash with

@@ -255,12 +255,13 @@ rec {
         default = null;
         example = lib.literalExpression "./signoff_keys.json";
         description = ''
-          Enrolled keys, installed as `config/signoff_keys.json` (generate
-          with `premptictl signoff enroll` and commit the file; it holds
-          public keys only). With `mutableConfig = false` it is rewritten on
-          every start; with `mutableConfig = true` only when absent, so
-          `premptictl signoff enroll` owns it afterwards. Required when
-          sign-off is enabled unless `mutableConfig` is set.
+          Enrolled keys, installed as `config/signoff_keys.json` (public
+          keys only, from `premptictl signoff enroll`). With
+          `mutableConfig = false` it is rewritten on every start; with
+          `mutableConfig = true` only when absent. Leave `null` to let
+          `premptictl signoff enroll` own the file in place: Nix then never
+          touches it, and it survives rebuilds. The plugin refuses to start
+          while sign-off is enabled and no key is enrolled.
         '';
       };
     };
@@ -297,10 +298,6 @@ rec {
     {
       assertion = cfg.signoff.enable -> cfg.audit.enable;
       message = "services.prempti.signoff.enable requires services.prempti.audit.enable (the key signs the audit record hash).";
-    }
-    {
-      assertion = cfg.signoff.enable -> (cfg.signoff.keysFile != null || cfg.mutableConfig);
-      message = "services.prempti.signoff.enable requires services.prempti.signoff.keysFile, or mutableConfig = true and `premptictl signoff enroll`.";
     }
   ];
 
