@@ -138,6 +138,8 @@ config files only when absent, after which `premptictl` owns them.
 - **Uninstall**: set `enable = false`, rebuild, then `premptictl hook remove`
   and `rm -rf ~/.prempti` if you want the prefix gone. Do not use
   `premptictl uninstall`; it expects the tarball layout.
-- `nix flake check` evaluates the NixOS module and builds the package; it
-  does not run the e2e suite (needs a live Falco). `nix develop` then
-  `make test-e2e` does.
+- `nix flake check` evaluates the NixOS module and builds the package with
+  the unit tests; it does not run the e2e suite (needs a live Falco). The
+  dev shell exports `FALCO` pointing at the store Falco, so `nix develop`
+  then `make test-e2e` (or `cargo build --release --workspace &&
+  cargo test -p prempti-tests --release`) runs the Falco-driven tests.

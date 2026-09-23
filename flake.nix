@@ -31,8 +31,10 @@
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.prempti ];
           packages = with pkgs; [ cargo rustc rustfmt clippy rust-analyzer ];
-          # `make test-e2e` looks for Falco under build/; point it at the store copy.
-          FALCO_BIN = "${self.packages.${pkgs.stdenv.hostPlatform.system}.falco-bin}/bin/falco";
+          # The e2e harness (tests/src/e2e.rs::find_falco) honours $FALCO before
+          # looking under build/; point it at the store copy so
+          # `cargo test -p prempti-tests --release` runs the Falco-driven tests.
+          FALCO = "${self.packages.${pkgs.stdenv.hostPlatform.system}.falco-bin}/bin/falco";
         };
       });
 
