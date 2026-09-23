@@ -6,3 +6,4 @@ tmp/
 
 # Packaging build output
 build/
+.devenv

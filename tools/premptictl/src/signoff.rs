@@ -299,6 +299,22 @@ pub fn is_p256_spki(der: &[u8]) -> bool {
     der.len() == 91 && der[..26] == P256_SPKI_PREFIX && der[26] == 0x04
 }
 
+/// Normalize what the authenticator library hands back to SPKI DER: it is
+/// either already SPKI or the raw 65-byte uncompressed SEC1 point (which is
+/// what `ctap-hid-fido2` produces from the COSE key). Anything else (Ed25519,
+/// compressed point) is not usable for ES256 sign-off.
+pub fn normalize_p256_public_key(bytes: &[u8]) -> Option<Vec<u8>> {
+    if is_p256_spki(bytes) {
+        return Some(bytes.to_vec());
+    }
+    if bytes.len() == 65 && bytes[0] == 0x04 {
+        let mut der = P256_SPKI_PREFIX.to_vec();
+        der.extend_from_slice(bytes);
+        return Some(der);
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Broker control channel
 // ---------------------------------------------------------------------------
@@ -522,13 +538,13 @@ fn enroll(prefix: &Path, label: &str, use_pin: bool) {
         eprintln!("enroll failed: {e}");
         process::exit(1);
     });
-    if !is_p256_spki(&key.public_key_der) {
+    let Some(public_key_der) = normalize_p256_public_key(&key.public_key_der) else {
         eprintln!(
             "enroll failed: authenticator returned a non-P-256 credential ({} byte key)",
             key.public_key_der.len()
         );
         process::exit(1);
-    }
+    };
     let credential_id = hex_encode(&key.credential_id);
     if file.keys.iter().any(|k| k.credential_id == credential_id) {
         eprintln!("This credential is already enrolled.");
@@ -537,7 +553,7 @@ fn enroll(prefix: &Path, label: &str, use_pin: bool) {
     file.keys.push(KeyEntry {
         label: label.to_string(),
         credential_id: credential_id.clone(),
-        public_key_der: hex_encode(&key.public_key_der),
+        public_key_der: hex_encode(&public_key_der),
         aaguid: hex_encode(&key.aaguid),
         rp_id: s.rp_id.clone(),
         enrolled_at_ms: now_ms(),
@@ -1036,6 +1052,11 @@ mod tests {
         der.extend(std::iter::repeat_n(0xab, 64));
         assert!(is_p256_spki(&der));
         assert!(!is_p256_spki(&der[..90]));
+        // Raw SEC1 point (what the authenticator library returns) gets wrapped.
+        assert_eq!(normalize_p256_public_key(&der[26..]).unwrap(), der);
+        assert_eq!(normalize_p256_public_key(&der).unwrap(), der);
+        assert!(normalize_p256_public_key(&[0u8; 32]).is_none());
+        assert!(normalize_p256_public_key(&der[27..]).is_none());
         assert_eq!(hex_decode(&hex_encode(&der)).unwrap(), der);
         assert!(hex_decode("").is_err());
         assert!(hex_decode("abc").is_err());
