@@ -2350,6 +2350,7 @@ fn print_usage() {
     eprintln!("  monitor status   Show LLM monitor configuration and preconditions");
     eprintln!("  audit verify     Verify the hash chain of log/audit.jsonl");
     eprintln!("  audit tail       Print recent audit records (-n N, -f, --json)");
+    eprintln!("  audit serve      Live web UI for the audit trail on 127.0.0.1:2803 (--addr)");
     eprintln!();
     eprintln!("  daemon [flags]   Run the supervisor (spawns Falco, owns logs and rotation,");
     eprintln!("                   owns the hook lifecycle). Normally invoked by the platform");

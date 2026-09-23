@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prempti audit trail</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f25; --line: #2a2e36; --fg: #d7dae0; --dim: #8b919c;
+    --allow: #3fb950; --ask: #d29922; --deny: #f85149; --defer: #8b949e; --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .stat { color: var(--dim); }
+  .stat b { color: var(--fg); }
+  .chain { padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .chain.ok { background: #1f3a26; color: var(--allow); }
+  .chain.bad { background: #3a1f1f; color: var(--deny); }
+  .chain.unk { background: #2a2e36; color: var(--dim); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  .filters input, .filters select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
+  .filters input[type=text] { flex: 1 1 260px; }
+  .filters label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+  main { display: grid; grid-template-columns: 1fr; }
+  @media (min-width: 1100px) { main.open { grid-template-columns: 1fr minmax(380px, 40%); } }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; position: sticky; top: 0; background: var(--bg); }
+  td.wrap { white-space: normal; word-break: break-all; max-width: 42ch; }
+  tr.row { cursor: pointer; }
+  tr.row:hover { background: #1a1d23; }
+  tr.row.sel { background: #1e2530; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+  .b-allow { background: #1f3a26; color: var(--allow); }
+  .b-ask { background: #3a2f12; color: var(--ask); }
+  .b-deny { background: #3a1f1f; color: var(--deny); }
+  .b-defer, .b-none { background: #2a2e36; color: var(--defer); }
+  .src { color: var(--dim); }
+  .llm-err { color: var(--deny); }
+  .llm-skip { color: var(--dim); }
+  aside { border-left: 1px solid var(--line); background: var(--panel); padding: 12px 16px; overflow: auto; position: sticky; top: 46px; height: calc(100vh - 46px); }
+  aside h2 { font-size: 13px; margin: 0 0 8px; color: var(--dim); font-weight: 600; }
+  aside .kv { margin: 0 0 10px; }
+  aside .kv dt { color: var(--dim); }
+  aside .kv dd { margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; }
+  aside pre { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+  .close { float: right; background: none; border: 1px solid var(--line); color: var(--dim); border-radius: 4px; cursor: pointer; font: inherit; padding: 2px 8px; }
+  .empty { padding: 40px; text-align: center; color: var(--dim); }
+  .tools { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+  .tools button { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .tools button.on { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Prempti audit trail</h1>
+  <span class="stat">records <b id="n-total">0</b></span>
+  <span class="stat">allow <b id="n-allow">0</b></span>
+  <span class="stat">ask <b id="n-ask">0</b></span>
+  <span class="stat">deny <b id="n-deny">0</b></span>
+  <span class="stat">defer <b id="n-defer">0</b></span>
+  <span class="stat">llm ok <b id="n-llm-ok">0</b> · err <b id="n-llm-err">0</b></span>
+  <span id="chain" class="chain unk">chain: checking…</span>
+  <div class="tools">
+    <button id="follow" class="on" title="Auto-scroll to newest">follow</button>
+    <button id="verify" title="Re-verify the hash chain now">verify</button>
+  </div>
+</header>
+<div class="filters">
+  <input id="q" type="text" placeholder="search tool input, reasons, rules, session…">
+  <label>final <select id="f-final"><option value="">any</option><option>allow</option><option>ask</option><option>deny</option><option>defer</option></select></label>
+  <label>source <select id="f-source"><option value="">any</option><option>falco</option><option>llm</option><option>floor</option><option>monitor</option><option>passthrough</option><option>reaper</option><option>broker</option></select></label>
+  <label>llm <select id="f-llm"><option value="">any</option><option value="ok">ok</option><option value="error">error</option><option value="skipped">skipped</option><option value="disabled">disabled</option></select></label>
+  <label>session <select id="f-session"><option value="">any</option></select></label>
+  <label>tool <select id="f-tool"><option value="">any</option></select></label>
+</div>
+<main id="main">
+  <div id="list">
+    <table>
+      <thead><tr>
+        <th>time</th><th>#</th><th>session</th><th>tool</th><th>input</th><th>falco</th><th>llm</th><th>final</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty">No audit records yet. They appear as the agent makes tool calls.</div>
+  </div>
+  <aside id="detail" hidden></aside>
+</main>
+<script>
+(() => {
+  const records = [];
+  const byId = new Map();
+  let lastSeq = 0, selected = null, follow = true;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const fmtTs = ms => { const d = new Date(ms); return d.toLocaleTimeString([], {hour12:false}) + '.' + String(d.getMilliseconds()).padStart(3,'0'); };
+  const fmtDate = ms => new Date(ms).toLocaleString([], {hour12:false});
+
+  function inputSummary(r) {
+    const t = r.tool || {}; let s = t.input || '';
+    try { const j = JSON.parse(s); s = j.command || j.file_path || j.pattern || j.url || j.prompt || j.description || s; if (typeof s !== 'string') s = JSON.stringify(s); } catch (_) {}
+    return s.replace(/\s+/g, ' ');
+  }
+  function llmCell(r) {
+    const l = r.llm || {}; const st = l.status || '';
+    if (st === 'ok') return `<span class="badge b-${esc(l.verdict)}">${esc(l.verdict)}</span> <span class="src">${l.latency_ms}ms</span>`;
+    if (st.startsWith('error')) return `<span class="llm-err" title="${esc(l.reason)}">${esc(st)}</span>`;
+    return `<span class="llm-skip">${esc(st)}</span>`;
+  }
+  function falcoCell(r) {
+    const f = r.falco || {}; const rules = (f.rules || []).map(x => x.rule);
+    const v = f.verdict || 'none';
+    return `<span class="badge b-${esc(v)}">${esc(v)}</span>${rules.length ? ` <span class="src" title="${esc(rules.join('\n'))}">${esc(rules[0])}${rules.length > 1 ? ' +' + (rules.length - 1) : ''}</span>` : ''}`;
+  }
+  function matches(r) {
+    const q = $('q').value.trim().toLowerCase();
+    const ff = $('f-final').value, fs = $('f-source').value, fl = $('f-llm').value, fse = $('f-session').value, ft = $('f-tool').value;
+    if (ff && (r.final || {}).verdict !== ff) return false;
+    if (fs && (r.final || {}).source !== fs) return false;
+    if (fl && !String((r.llm || {}).status || '').startsWith(fl)) return false;
+    if (fse && (r.agent || {}).session_id !== fse) return false;
+    if (ft && (r.tool || {}).name !== ft) return false;
+    if (q) {
+      const hay = [r.tool?.input, r.tool?.name, r.llm?.reason, r.llm?.roe_clause, r.final?.reason, r.agent?.session_id, r.agent?.agent_type, r.cwd,
+        ...(r.falco?.rules || []).map(x => x.rule + ' ' + x.message)].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }
+  function render() {
+    const tbody = $('rows'); const frag = document.createDocumentFragment(); let shown = 0;
+    for (const r of records) {
+      if (!matches(r)) continue; shown++;
+      const tr = document.createElement('tr'); tr.className = 'row' + (selected === r.seq ? ' sel' : ''); tr.dataset.seq = r.seq;
+      const a = r.agent || {}; const who = (a.session_id || '').slice(0, 8) + (a.agent_type ? '/' + a.agent_type : '');
+      const fin = r.final || {};
+      tr.innerHTML = `<td title="${esc(fmtDate(r.ts_ms))}">${fmtTs(r.ts_ms)}</td><td>${r.seq}</td><td title="${esc(a.session_id)}">${esc(who)}</td>` +
+        `<td>${esc(r.tool?.name)}</td><td class="wrap" title="${esc(inputSummary(r))}">${esc(inputSummary(r).slice(0, 160))}</td>` +
+        `<td>${falcoCell(r)}</td><td>${llmCell(r)}</td><td><span class="badge b-${esc(fin.verdict)}">${esc(fin.verdict)}</span> <span class="src">${esc(fin.source)}</span></td>`;
+      tr.onclick = () => select(r.seq);
+      frag.appendChild(tr);
+    }
+    tbody.replaceChildren(frag);
+    $('empty').hidden = shown > 0;
+    if (follow && shown) window.scrollTo(0, document.body.scrollHeight);
+  }
+  function stats() {
+    const c = {allow:0, ask:0, deny:0, defer:0, ok:0, err:0};
+    for (const r of records) { const v = r.final?.verdict; if (v in c) c[v]++; const s = r.llm?.status || ''; if (s === 'ok') c.ok++; else if (s.startsWith('error')) c.err++; }
+    $('n-total').textContent = records.length; $('n-allow').textContent = c.allow; $('n-ask').textContent = c.ask; $('n-deny').textContent = c.deny; $('n-defer').textContent = c.defer; $('n-llm-ok').textContent = c.ok; $('n-llm-err').textContent = c.err;
+  }
+  function refreshOptions(id, values) {
+    const sel = $(id); const cur = sel.value; const opts = ['<option value="">any</option>', ...[...values].sort().map(v => `<option value="${esc(v)}">${esc(v.length > 12 && id === 'f-session' ? v.slice(0, 12) + '…' : v)}</option>`)];
+    sel.innerHTML = opts.join(''); sel.value = cur;
+  }
+  function select(seq) {
+    selected = seq; const r = byId.get(seq); const d = $('detail'); if (!r) return;
+    const a = r.agent || {}, t = r.tool || {}, l = r.llm || {}, f = r.falco || {}, fin = r.final || {};
+    let input = t.input || ''; try { input = JSON.stringify(JSON.parse(input), null, 2); } catch (_) {}
+    d.innerHTML = `<button class="close" id="close">×</button><h2>record #${r.seq} · ${esc(fmtDate(r.ts_ms))} · ${r.latency_ms} ms</h2>
+      <dl class="kv">
+        <dt>final</dt><dd><span class="badge b-${esc(fin.verdict)}">${esc(fin.verdict)}</span> via ${esc(fin.source)}${fin.reason ? '\n' + esc(fin.reason) : ''}</dd>
+        <dt>LLM monitor</dt><dd>${esc(l.status)}${l.verdict ? ' → ' + esc(l.verdict) : ''}${l.model ? ' · ' + esc(l.model) : ''}${l.latency_ms ? ' · ' + l.latency_ms + ' ms · ' + l.attempts + ' attempt(s)' : ''}${l.reason ? '\n' + esc(l.reason) : ''}${l.roe_clause ? '\nRoE: ' + esc(l.roe_clause) : ''}</dd>
+        <dt>Falco</dt><dd>${esc(f.verdict)}${(f.rules || []).map(x => '\n• ' + esc(x.kind) + ' ' + esc(x.rule) + '\n  ' + esc(x.message)).join('')}</dd>
+        <dt>agent</dt><dd>${esc(a.name)} pid ${a.pid} · session ${esc(a.session_id)}${a.agent_id ? ' · subagent ' + esc(a.agent_type) + ' ' + esc(a.agent_id) : ''} · mode ${esc(r.mode)} · permission ${esc(a.permission_mode)}\ncwd ${esc(r.cwd)}\ntranscript ${esc(a.transcript_path)}</dd>
+        <dt>tool ${esc(t.name)} ${esc(t.use_id)}${t.input_truncated ? ' (input truncated in record)' : ''}</dt><dd><pre>${esc(input)}</pre>sha256 ${esc(t.input_sha256)}</dd>
+        <dt>chain</dt><dd>hash ${esc(r.hash)}\nprev ${esc(r.prev_hash)}${l.roe_sha256 ? '\nRoE ' + esc(l.roe_sha256) : ''}</dd>
+      </dl>`;
+    d.hidden = false; $('main').classList.add('open'); $('close').onclick = () => { d.hidden = true; $('main').classList.remove('open'); selected = null; render(); };
+    render();
+  }
+  async function poll() {
+    try {
+      const res = await fetch(`api/records?since=${lastSeq}`); if (!res.ok) throw new Error(res.status);
+      const batch = await res.json();
+      if (batch.length) {
+        for (const r of batch) { if (!byId.has(r.seq)) { records.push(r); byId.set(r.seq, r); } if (r.seq > lastSeq) lastSeq = r.seq; }
+        refreshOptions('f-session', new Set(records.map(r => r.agent?.session_id).filter(Boolean)));
+        refreshOptions('f-tool', new Set(records.map(r => r.tool?.name).filter(Boolean)));
+        stats(); render();
+      }
+    } catch (e) { $('chain').textContent = 'chain: server unreachable'; $('chain').className = 'chain bad'; }
+  }
+  async function verify() {
+    const el = $('chain'); el.textContent = 'chain: checking…'; el.className = 'chain unk';
+    try { const v = await (await fetch('api/verify')).json();
+      if (v.ok) { el.textContent = `chain: ok (${v.records} records)`; el.className = 'chain ok'; }
+      else { el.textContent = `chain: BROKEN at line ${v.line}: ${v.error}`; el.className = 'chain bad'; }
+    } catch (_) { el.textContent = 'chain: server unreachable'; el.className = 'chain bad'; }
+  }
+  for (const id of ['q', 'f-final', 'f-source', 'f-llm', 'f-session', 'f-tool']) $(id).addEventListener('input', render);
+  $('follow').onclick = () => { follow = !follow; $('follow').classList.toggle('on', follow); };
+  $('verify').onclick = verify;
+  poll(); verify(); setInterval(poll, 2000); setInterval(verify, 30000);
+})();
+</script>
+</body>
+</html>
