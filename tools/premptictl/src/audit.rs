@@ -332,10 +332,29 @@ fn s<'a>(v: &'a serde_json::Value, path: &[&str]) -> &'a str {
     cur.as_str().unwrap_or("")
 }
 
-/// One-line summary: `ts seq session[/agent_type] tool final(source) falco=… llm=…`.
+/// One-line summary: `ts seq session[/agent_type] tool final(source) falco=… llm=…`,
+/// or for a sign-off record `ts seq signoff <decision> for #<request_seq> …`.
 pub fn summarize(v: &serde_json::Value) -> String {
     let ts = v["ts_ms"].as_u64().map(format_ts_ms).unwrap_or_default();
     let seq = v["seq"].as_u64().unwrap_or(0);
+    if v["kind"] == "signoff" {
+        let decision = v["decision"].as_str().unwrap_or("?");
+        let key = s(v, &["key", "label"]);
+        let held = v["held_ms"].as_u64().unwrap_or(0) / 1000;
+        let mut out = format!(
+            "{ts} #{seq} signoff {decision} for #{} after {held}s",
+            v["request_seq"].as_u64().unwrap_or(0)
+        );
+        if !key.is_empty() {
+            out.push_str(&format!(" by key '{key}'"));
+        }
+        let reason = v["reason"].as_str().unwrap_or("");
+        if !reason.is_empty() && decision != "approve" {
+            out.push_str("  ");
+            out.push_str(&short(reason, 60));
+        }
+        return out;
+    }
     let session: String = s(v, &["agent", "session_id"]).chars().take(8).collect();
     let agent_type = s(v, &["agent", "agent_type"]);
     let who = if agent_type.is_empty() {
@@ -489,8 +508,30 @@ fn route(path: &Path, url: &str) -> (u16, &'static str, String) {
             (200, "application/json", records_since(path, since, limit))
         }
         "/api/verify" => (200, "application/json", verify_json(path)),
+        "/api/signoff" => (200, "application/json", signoff_json(prefix_of(path))),
         _ => (404, "text/plain; charset=utf-8", "not found".to_string()),
     }
+}
+
+/// `<prefix>` from `<prefix>/log/audit.jsonl` (the broker socket lives
+/// under the same prefix).
+fn prefix_of(audit_path: &Path) -> &Path {
+    audit_path
+        .parent()
+        .and_then(|log| log.parent())
+        .unwrap_or(audit_path)
+}
+
+/// Held sign-offs from the live broker, for the UI banner. A broker that is
+/// down or has sign-off disabled is reported, never an error.
+fn signoff_json(prefix: &Path) -> String {
+    match crate::signoff::fetch_held(prefix) {
+        Ok((enabled, ttl_secs, held)) => serde_json::json!({
+            "ok": true, "enabled": enabled, "ttl_secs": ttl_secs, "held": held,
+        }),
+        Err(e) => serde_json::json!({ "ok": false, "enabled": false, "held": [], "error": e }),
+    }
+    .to_string()
 }
 
 fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
@@ -570,7 +611,7 @@ mod tests {
         let (status, ctype, body) = route(&path, "/");
         assert_eq!(status, 200);
         assert!(ctype.starts_with("text/html"));
-        assert!(body.contains("<title>Prempti audit trail</title>"));
+        assert!(body.contains("audit trail</title>"), "title missing");
         assert!(body.contains("api/records"));
         assert_eq!(route(&path, "/nope").0, 404);
     }
@@ -704,6 +745,37 @@ mod tests {
             "{out}"
         );
         assert!(out.ends_with("echo hi"), "{out}");
+    }
+
+    #[test]
+    fn summarize_renders_signoff_records() {
+        let v = serde_json::json!({
+            "kind": "signoff", "seq": 9, "ts_ms": 0, "request_seq": 8, "decision": "approve",
+            "held_ms": 12_500, "key": {"label": "yubi"}, "reason": "approved with hardware key",
+        });
+        assert_eq!(
+            summarize(&v),
+            "1970-01-01T00:00:00Z #9 signoff approve for #8 after 12s by key 'yubi'"
+        );
+        let d = serde_json::json!({
+            "kind": "signoff", "seq": 3, "ts_ms": 0, "request_seq": 2, "decision": "expired",
+            "held_ms": 300_000, "key": {"label": ""}, "reason": "no operator decision within 300s",
+        });
+        assert_eq!(
+            summarize(&d),
+            "1970-01-01T00:00:00Z #3 signoff expired for #2 after 300s  no operator decision within 300s"
+        );
+    }
+
+    #[test]
+    fn signoff_route_reports_broker_down() {
+        let path = temp_audit(&[]);
+        let (status, ctype, body) = route(&path, "/api/signoff");
+        assert_eq!(status, 200);
+        assert_eq!(ctype, "application/json");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], false);
+        assert!(v["held"].as_array().unwrap().is_empty());
     }
 
     #[test]

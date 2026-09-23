@@ -119,6 +119,30 @@ impl MonitorSpec {
     }
 }
 
+/// Hardware-key sign-off settings for `E2eHarness::start_with_signoff`.
+pub struct SignoffSpec {
+    /// Seconds a held call waits before the reaper denies it.
+    pub ttl_secs: u64,
+    pub rp_id: String,
+    pub require_uv: bool,
+    /// Contents of `signoff_keys.json` (see `softkey::key_file`).
+    pub keys_json: String,
+    /// Also enable the LLM monitor against this endpoint.
+    pub monitor: Option<MonitorSpec>,
+}
+
+impl SignoffSpec {
+    pub fn new(keys_json: String) -> Self {
+        SignoffSpec {
+            ttl_secs: 300,
+            rp_id: "prempti.local".to_string(),
+            require_uv: false,
+            keys_json,
+            monitor: None,
+        }
+    }
+}
+
 /// Walk an audit file's hash chain (same rules as `premptictl audit
 /// verify`). Returns the number of records.
 pub fn verify_audit_chain(path: &Path) -> Result<usize, String> {
@@ -198,7 +222,7 @@ impl E2eHarness {
     /// guardrails mode only; monitor/passthrough always resolve as defer.
     /// Returns `None` if Falco or the plugin is not available.
     pub fn start_with_default_action(mode: &str, default_action: &str) -> Option<Self> {
-        Self::start_internal(mode, default_action, false, None)
+        Self::start_internal(mode, default_action, false, None, None)
     }
 
     /// Start Falco with the repository's shipped default and seen rules.
@@ -206,13 +230,19 @@ impl E2eHarness {
     /// security regressions in production macros must be exercised against
     /// the exact YAML that users install.
     pub fn start_with_shipped_rules(mode: &str) -> Option<Self> {
-        Self::start_internal(mode, "allow", true, None)
+        Self::start_internal(mode, "allow", true, None, None)
     }
 
     /// Start with the LLM monitor enabled against `spec.endpoint` (normally
     /// a `mock_llm::MockLlm`). The compact fixture rules are used.
     pub fn start_with_monitor(mode: &str, spec: &MonitorSpec) -> Option<Self> {
-        Self::start_internal(mode, "allow", false, Some(spec))
+        Self::start_internal(mode, "allow", false, Some(spec), None)
+    }
+
+    /// Start with hardware-key sign-off enabled: every `ask` is held until
+    /// a control request on the broker socket resolves it.
+    pub fn start_with_signoff(mode: &str, spec: &SignoffSpec) -> Option<Self> {
+        Self::start_internal(mode, "allow", false, spec.monitor.as_ref(), Some(spec))
     }
 
     fn start_internal(
@@ -220,6 +250,7 @@ impl E2eHarness {
         default_action: &str,
         shipped_rules: bool,
         monitor: Option<&MonitorSpec>,
+        signoff: Option<&SignoffSpec>,
     ) -> Option<Self> {
         let falco_bin = find_falco()?;
         let plugin_lib = find_plugin_lib()?;
@@ -282,6 +313,18 @@ impl E2eHarness {
                 spec.timeout_ms,
                 spec.on_error,
                 skip
+            ));
+        }
+
+        if let Some(spec) = signoff {
+            let keys_path = e2e_dir.join("signoff_keys.json");
+            std::fs::write(&keys_path, &spec.keys_json).expect("write key store");
+            extra_init.push_str(&format!(
+                "      signoff:\n        enabled: true\n        ttl_secs: {}\n        rp_id: \"{}\"\n        require_uv: {}\n        keys_path: \"{}\"\n",
+                spec.ttl_secs,
+                spec.rp_id,
+                spec.require_uv,
+                to_forward_slashes(&keys_path)
             ));
         }
 
@@ -363,6 +406,43 @@ impl E2eHarness {
             http_port,
             audit_path,
         })
+    }
+
+    /// One operator control round-trip on the broker socket (what
+    /// `premptictl signoff` does): a `{"kind":…}` line in, a JSON line back.
+    pub fn control(&self, kind: &str, fields: &serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead, BufReader, Write};
+        #[cfg(unix)]
+        use std::os::unix::net::UnixStream;
+        #[cfg(windows)]
+        use uds_windows::UnixStream;
+
+        let mut stream = UnixStream::connect(&self.socket_path).expect("connect broker");
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let mut body = String::new();
+        for (k, v) in fields.as_object().into_iter().flatten() {
+            body.push_str(&format!(",{}:{}", serde_json::Value::String(k.clone()), v));
+        }
+        let line = format!("{{\"kind\":\"{kind}\"{body}}}\n");
+        stream.write_all(line.as_bytes()).expect("write control");
+        let mut reply = String::new();
+        BufReader::new(&stream)
+            .read_line(&mut reply)
+            .expect("read control reply");
+        serde_json::from_str(reply.trim()).expect("control reply JSON")
+    }
+
+    /// Poll `signoff_list` until at least `n` calls are held (or 10 s pass).
+    pub fn wait_for_held(&self, n: usize) -> Vec<serde_json::Value> {
+        for _ in 0..100 {
+            let v = self.control("signoff_list", &serde_json::json!({}));
+            let held = v["held"].as_array().cloned().unwrap_or_default();
+            if held.len() >= n {
+                return held;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Vec::new()
     }
 
     /// Path of this instance's audit trail.

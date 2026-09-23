@@ -232,6 +232,18 @@ Advanced users can run the supervisor directly via `ctl daemon --prefix <path>` 
 
 The broker keeps a pending entry until every expected signal has landed even after it has already responded (deny short-circuit), so late Falco alerts and the LLM outcome still reach the record. `agent.id` / `agent.type` Falco fields expose Claude Code's subagent identity to rules and the seen record.
 
+`premptictl audit serve [--addr 127.0.0.1:2803]` serves a loopback-only live UI over the file (`/api/records?since=N`, `/api/verify`, `/api/signoff`); every record carries `kind: request`, sign-off decisions are appended as `kind: signoff` records (below).
+
+### Hardware-key sign-off (FIDO2 / YubiKey)
+
+`plugins/coding-agents-plugin/src/signoff.rs` (verification) and `tools/premptictl/src/signoff.rs` (operator CLI, authenticator access via `ctap-hid-fido2` behind the default `fido2` cargo feature). With `init_config.signoff.enabled`, an `ask` verdict — whether staged by a Falco rule or the LLM monitor — is not returned to the agent. When every signal has landed the broker **holds** the request: it seals the request record (`final.verdict: ask`, `signoff.status: pending`) and keeps the entry, with the interceptor still blocked, until one of:
+
+- `premptictl signoff approve <seq>`: the CLI asks the authenticator for an assertion under `signoff.rp_id` with **challenge = the held request's audit record hash** (raw 32 bytes; the library hands the key `sha256(challenge)` as client data hash). The plugin checks the credential is enrolled in `signoff.keys_path` (`config/signoff_keys.json`, written by `premptictl signoff enroll`, public keys only), `auth_data[0..32] == sha256(rp_id)`, the user-present flag (and user-verified when `signoff.require_uv`), and the ES256 signature over `auth_data || sha256(challenge)` with `p256`. Only then does it respond `allow`. A bad proof leaves the call held.
+- `premptictl signoff deny <seq> [--reason]`: no key needed; responds `deny` with `sign-off denied by operator: <reason>`.
+- the reaper after `signoff.ttl_secs` (default 300): responds `deny` (`sign-off expired`).
+
+Each outcome is its own hash-chained `kind: signoff` audit record (`decision` approve|deny|expired, `request_seq`/`request_hash` of the held call, key label, credential id, sign count, UP/UV flags, the raw `auth_data`/`signature`, `held_ms`). `premptictl signoff list|watch` and the audit UI banner show what is waiting. The operator channel is the broker socket itself: a line starting with `{"kind":…}` (`signoff_list`, `signoff_resolve`) is a control request instead of an interceptor request; listing and denying are open to anyone who can reach the socket (same user), approving needs a valid assertion. `premptictl hook add` raises `PREMPTI_TIMEOUT_MS` / the per-hook `timeout` to `ttl_secs + 15 s` (or the monitor's wait, whichever is larger; interceptor cap 1 h). Init fails fast if `audit_enabled` is off, the key store is missing/empty/unparseable, or `ttl_secs` is 0. Monitor and passthrough modes never hold. Nix: `services.prempti.signoff.{enable,ttlSecs,rpId,requireUv,keysFile}`; building `premptictl` with the `fido2` feature needs `libudev` (hidapi).
+
 ### Fail-safety
 
 - **Fail-closed**: if the plugin/Falco is unreachable, tool calls are denied.
@@ -250,6 +262,7 @@ All components are installed under `~/.prempti/`:
 │   ├── falco.yaml          # Base Falco config (engine, output, isolation)
 │   ├── falco.coding_agents_plugin.yaml  # Plugin config (plugin def, rules, http_output, audit, monitor)
 │   ├── roe.md              # Rules of Engagement for the LLM monitor (premptictl roe set)
+│   ├── signoff_keys.json   # Enrolled FIDO2 keys for hardware sign-off (premptictl signoff enroll)
 │   └── supervisor.yaml     # Supervisor config (rotation, stop timeout); preserved on upgrade
 ├── log/                    # Falco logs (rotated by supervisor): falco.log[.1..N], falco.err[.1..N]
 │   └── audit.jsonl         # Hash-chained audit trail (never rotated; premptictl audit verify)

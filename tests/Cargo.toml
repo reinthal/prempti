@@ -10,6 +10,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tiny_http = "0.12"
+# Software ES256 authenticator for the hardware-key sign-off e2e tests.
+p256 = "0.14"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2"

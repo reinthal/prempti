@@ -13,7 +13,8 @@ pub type BrokerStream = uds_windows::UnixStream;
 
 use dashmap::DashMap;
 
-use crate::audit::{AuditDraft, AuditSink, FalcoHit, LlmOutcome};
+use crate::audit::{AuditDraft, AuditSink, FalcoHit, LlmOutcome, SignoffRecord};
+use crate::signoff::{self, Proof, SignoffPolicy};
 use crate::verdict::Verdict;
 
 /// Default TTL for pending requests. Entries older than this are reaped.
@@ -75,6 +76,79 @@ pub struct Broker {
     /// Audit trail sink. `None` when auditing is disabled (or in unit tests
     /// that don't care about the trail).
     audit: Mutex<Option<Arc<AuditSink>>>,
+    /// Hardware-key sign-off policy. `None` = disabled: `ask` verdicts go
+    /// to the agent as before.
+    signoff: Mutex<Option<Arc<SignoffPolicy>>>,
+    /// How long a held request waits for the operator before it is denied.
+    signoff_ttl_secs: AtomicU64,
+}
+
+/// A request parked for hardware-key sign-off: every signal has landed,
+/// the staged verdict was `ask`, the audit record is sealed, and the wire
+/// response waits for `resolve_signoff` or the reaper.
+struct Held {
+    since: Instant,
+    /// `seq` / `hash` of the sealed request record. The hash (raw bytes)
+    /// is the FIDO2 challenge the operator's key must sign.
+    request_seq: u64,
+    request_hash: String,
+    /// The `ask` reason the agent would have seen.
+    reason: String,
+}
+
+/// Operator decision on a held request.
+pub enum SignoffDecision {
+    Approve(Proof),
+    Deny(String),
+}
+
+/// What `resolve_signoff` did.
+#[derive(Debug)]
+pub struct SignoffOutcome {
+    pub decision: &'static str,
+    /// `seq` of the appended sign-off record (0 if auditing failed).
+    pub seq: u64,
+    pub key_label: String,
+}
+
+/// Snapshot of a held request for `premptictl signoff list`.
+#[derive(Debug, Clone)]
+pub struct HeldSummary {
+    pub correlation_id: u64,
+    pub request_seq: u64,
+    pub request_hash: String,
+    pub reason: String,
+    pub tool: String,
+    pub input: String,
+    pub cwd: String,
+    pub session_id: String,
+    pub agent_type: String,
+    pub llm_reason: String,
+    pub llm_clause: String,
+    pub falco_rules: Vec<String>,
+    pub age_secs: u64,
+    pub expires_in_secs: u64,
+}
+
+impl HeldSummary {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "correlation_id": self.correlation_id,
+            "request_seq": self.request_seq,
+            "request_hash": self.request_hash,
+            "reason": self.reason,
+            "tool": self.tool,
+            "input": self.input,
+            "cwd": self.cwd,
+            "session_id": self.session_id,
+            "agent_type": self.agent_type,
+            "llm_reason": self.llm_reason,
+            "llm_clause": self.llm_clause,
+            "falco_rules": self.falco_rules,
+            "age_secs": self.age_secs,
+            "expires_in_secs": self.expires_in_secs,
+        })
+    }
 }
 
 /// A pending request from an interceptor, awaiting a verdict.
@@ -103,6 +177,8 @@ struct PendingRequest {
     remaining_signals: AtomicU64,
     /// Audit record under construction.
     audit: Mutex<AuditDraft>,
+    /// Set when the request is parked for hardware-key sign-off.
+    held: Mutex<Option<Held>>,
 }
 
 impl Broker {
@@ -115,7 +191,38 @@ impl Broker {
             shutdown: AtomicBool::new(false),
             pending_ttl_secs: AtomicU64::new(DEFAULT_PENDING_TTL_SECS),
             audit: Mutex::new(None),
+            signoff: Mutex::new(None),
+            signoff_ttl_secs: AtomicU64::new(300),
         }
+    }
+
+    /// Enable hardware-key sign-off: `ask` verdicts are held until an
+    /// enrolled authenticator approves them (or `ttl_secs` pass → deny).
+    pub fn set_signoff(&self, policy: SignoffPolicy, ttl_secs: u64) {
+        let ttl_secs = ttl_secs.max(1);
+        log::info!(
+            "broker sign-off: enabled (rp_id={}, {} key(s), ttl {ttl_secs}s, require_uv={})",
+            policy.rp_id,
+            policy.keys.keys.len(),
+            policy.require_uv
+        );
+        *self.signoff.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(policy));
+        self.signoff_ttl_secs.store(ttl_secs, Ordering::Relaxed);
+    }
+
+    fn signoff_policy(&self) -> Option<Arc<SignoffPolicy>> {
+        self.signoff
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn signoff_enabled(&self) -> bool {
+        self.signoff_policy().is_some()
+    }
+
+    pub fn signoff_ttl_secs(&self) -> u64 {
+        self.signoff_ttl_secs.load(Ordering::Relaxed)
     }
 
     /// Attach the audit sink. Records are appended for every request that
@@ -124,11 +231,14 @@ impl Broker {
         *self.audit.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
     }
 
-    fn audit_append(&self, draft: &AuditDraft) {
+    fn audit_append(&self, draft: &AuditDraft) -> Option<(u64, String)> {
         let guard = self.audit.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(sink) = guard.as_ref() {
-            sink.append(draft);
-        }
+        guard.as_ref().and_then(|sink| sink.append(draft))
+    }
+
+    fn audit_append_signoff(&self, rec: &SignoffRecord) -> Option<(u64, String)> {
+        let guard = self.audit.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().and_then(|sink| sink.append_signoff(rec))
     }
 
     /// Signal all background threads to stop.
@@ -301,6 +411,7 @@ impl Broker {
                 created_at: Instant::now(),
                 remaining_signals: AtomicU64::new(expected_signals.max(1)),
                 audit: Mutex::new(draft),
+                held: Mutex::new(None),
             },
         );
     }
@@ -425,6 +536,11 @@ impl Broker {
             Some(false) | None => return,
         }
 
+        // Hardware-key sign-off: park a staged `ask` instead of responding.
+        if !self.is_monitor() && self.signoff_enabled() && self.try_hold(correlation_id) {
+            return;
+        }
+
         let Some((_, pending)) = self.pending.remove(&correlation_id) else {
             return;
         };
@@ -443,6 +559,203 @@ impl Broker {
         self.audit_append(&draft);
     }
 
+    /// Park `correlation_id` for sign-off if its staged verdict is `ask` and
+    /// it has not responded yet. Seals the request record (the operator
+    /// signs its hash) and keeps the entry in the pending map. Returns
+    /// false when the request does not qualify (caller proceeds normally).
+    fn try_hold(&self, correlation_id: u64) -> bool {
+        enum Step {
+            NotHeld,
+            Held,
+            AuditFailed,
+        }
+        let step = {
+            let Some(pending) = self.pending.get(&correlation_id) else {
+                return false;
+            };
+            let responded = pending
+                .stream
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none();
+            let mut current = pending
+                .current_verdict
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let is_ask = matches!(current.as_ref(), Some((Verdict::Ask(_), _)));
+            if responded || !is_ask {
+                Step::NotHeld
+            } else {
+                let (verdict, source) = current.take().expect("checked above");
+                drop(current);
+                let reason = match &verdict {
+                    Verdict::Ask(r) => r.clone(),
+                    _ => String::new(),
+                };
+                let (tool, sealed) = {
+                    let mut draft = pending.audit.lock().unwrap_or_else(|e| e.into_inner());
+                    draft.set_final(&verdict, source);
+                    draft.signoff_status = "pending";
+                    (draft.tool.name.clone(), self.audit_append(&draft))
+                };
+                match sealed {
+                    Some((request_seq, request_hash)) => {
+                        log::warn!(
+                            "sign-off required for {correlation_id} ({tool}): {reason} \
+                             -- approve with `premptictl signoff approve {request_seq}` \
+                             within {}s",
+                            self.signoff_ttl_secs()
+                        );
+                        *pending.held.lock().unwrap_or_else(|e| e.into_inner()) = Some(Held {
+                            since: Instant::now(),
+                            request_seq,
+                            request_hash,
+                            reason,
+                        });
+                        Step::Held
+                    }
+                    None => Step::AuditFailed,
+                }
+            }
+        };
+        match step {
+            Step::NotHeld => false,
+            Step::Held => true,
+            Step::AuditFailed => {
+                // No sealed record means no challenge to sign. Fail closed
+                // rather than fall back to an unsigned `ask`.
+                if let Some((_, pending)) = self.pending.remove(&correlation_id) {
+                    log::error!(
+                        "sign-off for {correlation_id}: audit record could not be written; denying"
+                    );
+                    Self::respond(
+                        &pending,
+                        Verdict::Deny(
+                            "sign-off unavailable: audit record could not be written".to_string(),
+                        ),
+                        "signoff",
+                    );
+                }
+                true
+            }
+        }
+    }
+
+    /// Requests currently parked for sign-off, oldest first.
+    pub fn held_requests(&self) -> Vec<HeldSummary> {
+        let now = Instant::now();
+        let ttl = self.signoff_ttl_secs();
+        let mut out: Vec<HeldSummary> = self
+            .pending
+            .iter()
+            .filter_map(|entry| {
+                let p = entry.value();
+                let held = p.held.lock().unwrap_or_else(|e| e.into_inner());
+                let h = held.as_ref()?;
+                let draft = p.audit.lock().unwrap_or_else(|e| e.into_inner());
+                let age = now.duration_since(h.since).as_secs();
+                Some(HeldSummary {
+                    correlation_id: *entry.key(),
+                    request_seq: h.request_seq,
+                    request_hash: h.request_hash.clone(),
+                    reason: h.reason.clone(),
+                    tool: draft.tool.name.clone(),
+                    input: draft.tool.input.chars().take(400).collect(),
+                    cwd: draft.cwd.clone(),
+                    session_id: draft.agent.session_id.clone(),
+                    agent_type: draft.agent.agent_type.clone(),
+                    llm_reason: draft.llm.reason.clone(),
+                    llm_clause: draft.llm.roe_clause.clone(),
+                    falco_rules: draft.falco.iter().map(|f| f.rule.clone()).collect(),
+                    age_secs: age,
+                    expires_in_secs: ttl.saturating_sub(age),
+                })
+            })
+            .collect();
+        out.sort_by_key(|h| h.request_seq);
+        out
+    }
+
+    /// Apply the operator's decision to a held request. `Approve` verifies
+    /// the FIDO2 proof against the enrolled keys and the request's record
+    /// hash before anything is written to the wire; a bad proof leaves the
+    /// request held. `Deny` needs no proof (deny is always safe).
+    pub fn resolve_signoff(
+        &self,
+        correlation_id: u64,
+        decision: SignoffDecision,
+    ) -> Result<SignoffOutcome, String> {
+        let policy = self
+            .signoff_policy()
+            .ok_or_else(|| "hardware-key sign-off is not enabled".to_string())?;
+
+        // Verify under a shared ref (no removal yet) so a failed proof keeps
+        // the request parked.
+        let (verdict, mut rec) = {
+            let pending = self
+                .pending
+                .get(&correlation_id)
+                .ok_or_else(|| "no such request (already resolved or expired?)".to_string())?;
+            let held = pending.held.lock().unwrap_or_else(|e| e.into_inner());
+            let h = held
+                .as_ref()
+                .ok_or_else(|| "request is not awaiting sign-off".to_string())?;
+            let mut rec = SignoffRecord {
+                correlation_id,
+                request_seq: h.request_seq,
+                request_hash: h.request_hash.clone(),
+                rp_id: policy.rp_id.clone(),
+                held_ms: h.since.elapsed().as_millis() as u64,
+                ..Default::default()
+            };
+            let verdict = match &decision {
+                SignoffDecision::Approve(proof) => {
+                    let challenge = signoff::hex_decode(&h.request_hash)
+                        .map_err(|e| format!("request hash {e}"))?;
+                    let v = signoff::verify(&policy, &challenge, proof)?;
+                    rec.decision = "approve";
+                    rec.reason = "approved with hardware key".to_string();
+                    rec.key_label = v.key_label;
+                    rec.credential_id = v.credential_id_hex;
+                    rec.sign_count = v.sign_count;
+                    rec.user_present = v.user_present;
+                    rec.user_verified = v.user_verified;
+                    rec.auth_data = signoff::hex_encode(&proof.auth_data);
+                    rec.signature = signoff::hex_encode(&proof.signature);
+                    Verdict::Allow
+                }
+                SignoffDecision::Deny(reason) => {
+                    rec.decision = "deny";
+                    rec.reason = reason.clone();
+                    Verdict::Deny(format!("sign-off denied by operator: {reason}"))
+                }
+            };
+            (verdict, rec)
+        };
+
+        let Some((_, pending)) = self.pending.remove(&correlation_id) else {
+            return Err("request was resolved concurrently".to_string());
+        };
+        Self::respond(&pending, verdict, "signoff");
+        log::info!(
+            "sign-off {} for {correlation_id} (record seq {}){}",
+            rec.decision,
+            rec.request_seq,
+            if rec.key_label.is_empty() {
+                String::new()
+            } else {
+                format!(" by key '{}'", rec.key_label)
+            }
+        );
+        let seq = self.audit_append_signoff(&rec).map(|(s, _)| s).unwrap_or(0);
+        let key_label = std::mem::take(&mut rec.key_label);
+        Ok(SignoffOutcome {
+            decision: rec.decision,
+            seq,
+            key_label,
+        })
+    }
+
     /// True when the wire verdict for this request has already been written
     /// (or the entry no longer exists). Lets a slow verdict source skip work
     /// whose outcome can no longer change the response.
@@ -453,22 +766,68 @@ impl Broker {
             .unwrap_or(true)
     }
 
-    /// Remove pending requests older than `ttl`.
+    /// Remove pending requests older than `ttl`. Requests held for sign-off
+    /// are measured from the moment they were parked against the sign-off
+    /// TTL instead, and are denied as `expired` with their own record.
     /// Returns the number of reaped entries.
     pub fn reap_stale(&self, ttl: std::time::Duration) -> usize {
         let now = Instant::now();
+        let signoff_ttl = std::time::Duration::from_secs(self.signoff_ttl_secs());
         let mut reaped = 0;
 
         // Collect stale IDs first to avoid holding DashMap iterators during removal.
         let stale_ids: Vec<u64> = self
             .pending
             .iter()
-            .filter(|entry| now.duration_since(entry.value().created_at) > ttl)
+            .filter(|entry| {
+                let p = entry.value();
+                let held = p.held.lock().unwrap_or_else(|e| e.into_inner());
+                match held.as_ref() {
+                    Some(h) => now.duration_since(h.since) > signoff_ttl,
+                    None => now.duration_since(p.created_at) > ttl,
+                }
+            })
             .map(|entry| *entry.key())
             .collect();
 
         for id in stale_ids {
             if let Some((_, pending)) = self.pending.remove(&id) {
+                let held = pending
+                    .held
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+                if let Some(h) = held {
+                    log::warn!(
+                        "sign-off for {id} (record seq {}) expired after {:?}; denying",
+                        h.request_seq,
+                        now.duration_since(h.since)
+                    );
+                    Self::respond(
+                        &pending,
+                        Verdict::Deny(format!(
+                            "sign-off expired: no operator approval within {}s",
+                            signoff_ttl.as_secs()
+                        )),
+                        "signoff",
+                    );
+                    let rec = SignoffRecord {
+                        correlation_id: id,
+                        request_seq: h.request_seq,
+                        request_hash: h.request_hash,
+                        decision: "expired",
+                        reason: format!("no operator decision within {}s", signoff_ttl.as_secs()),
+                        rp_id: self
+                            .signoff_policy()
+                            .map(|p| p.rp_id.clone())
+                            .unwrap_or_default(),
+                        held_ms: now.duration_since(h.since).as_millis() as u64,
+                        ..Default::default()
+                    };
+                    self.audit_append_signoff(&rec);
+                    reaped += 1;
+                    continue;
+                }
                 log::warn!(
                     "reaping stale pending request {} (age {:?})",
                     id,
@@ -1092,6 +1451,175 @@ mod tests {
         assert!(broker.has_responded(1));
         // Unknown id counts as responded (nothing left to influence).
         assert!(broker.has_responded(99));
+    }
+
+    // ------------------------------------------------------------------
+    // Hardware-key sign-off
+    // ------------------------------------------------------------------
+
+    use crate::signoff::testkey::{policy, SoftKey};
+
+    fn broker_with_signoff(label: &str, key: &SoftKey, ttl: u64) -> (Broker, std::path::PathBuf) {
+        let (broker, path) = broker_with_audit(label);
+        broker.set_signoff(policy(vec![key.enrolled("yubi")], false), ttl);
+        (broker, path)
+    }
+
+    fn proof_for(key: &SoftKey, request_hash: &str) -> Proof {
+        let challenge = signoff::hex_decode(request_hash).unwrap();
+        key.assert("prempti.local", &challenge, 0x01, 7)
+    }
+
+    #[test]
+    fn signoff_holds_ask_until_approved() {
+        let key = SoftKey::new(10);
+        let (broker, path) = broker_with_signoff("hold", &key, 300);
+        let peer = register_with(&broker, 1, "wire-1");
+        broker.apply_ask(1, "Rule A: confirm".to_string(), falco("Rule A"));
+        broker.apply_seen(1);
+        // Every signal landed, yet nothing on the wire: parked for sign-off.
+        expect_no_response(&peer);
+        assert_eq!(broker.pending_count(), 1);
+        assert!(!broker.has_responded(1));
+
+        let held = broker.held_requests();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].correlation_id, 1);
+        assert_eq!(held[0].reason, "Rule A: confirm");
+        assert_eq!(held[0].falco_rules, vec!["Rule A".to_string()]);
+        assert_eq!(held[0].request_hash.len(), 64);
+        let recs = audit_records(&path);
+        assert_eq!(recs.len(), 1, "request record sealed at hold time");
+        assert_eq!(recs[0]["final"]["verdict"], "ask");
+        assert_eq!(recs[0]["signoff"]["status"], "pending");
+        assert_eq!(recs[0]["hash"], held[0].request_hash);
+
+        let out = broker
+            .resolve_signoff(
+                1,
+                SignoffDecision::Approve(proof_for(&key, &held[0].request_hash)),
+            )
+            .unwrap();
+        assert_eq!(out.decision, "approve");
+        assert_eq!(out.key_label, "yubi");
+        assert_eq!(out.seq, 2);
+        let resp = read_response_json(&peer);
+        assert_eq!(resp["decision"], "allow");
+        assert_eq!(broker.pending_count(), 0);
+        let recs = audit_records(&path);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[1]["kind"], "signoff");
+        assert_eq!(recs[1]["decision"], "approve");
+        assert_eq!(recs[1]["request_hash"], recs[0]["hash"]);
+        assert_eq!(recs[1]["prev_hash"], recs[0]["hash"]);
+        assert_eq!(recs[1]["key"]["label"], "yubi");
+        assert_eq!(recs[1]["key"]["sign_count"], 7);
+    }
+
+    #[test]
+    fn signoff_bad_proof_keeps_request_held_and_deny_needs_none() {
+        let key = SoftKey::new(11);
+        let other = SoftKey::new(12);
+        let (broker, path) = broker_with_signoff("badproof", &key, 300);
+        let peer = register_with(&broker, 1, "wire-1");
+        broker.apply_ask(1, "LLM monitor: sign-off".to_string(), Source::Llm);
+        broker.apply_seen(1);
+        let held = broker.held_requests();
+
+        // Unenrolled key.
+        let err = broker
+            .resolve_signoff(
+                1,
+                SignoffDecision::Approve(proof_for(&other, &held[0].request_hash)),
+            )
+            .unwrap_err();
+        assert!(err.contains("not enrolled"), "{err}");
+        // Right key, wrong challenge.
+        let stale = key.assert("prempti.local", &[0u8; 32], 0x01, 1);
+        let err = broker
+            .resolve_signoff(1, SignoffDecision::Approve(stale))
+            .unwrap_err();
+        assert!(err.contains("does not verify"), "{err}");
+        expect_no_response(&peer);
+        assert_eq!(broker.pending_count(), 1);
+
+        let out = broker
+            .resolve_signoff(1, SignoffDecision::Deny("out of scope".to_string()))
+            .unwrap();
+        assert_eq!(out.decision, "deny");
+        let resp = read_response_json(&peer);
+        assert_eq!(resp["decision"], "deny");
+        assert!(resp["reason"].as_str().unwrap().contains("out of scope"));
+        let recs = audit_records(&path);
+        assert_eq!(recs[1]["decision"], "deny");
+        assert_eq!(recs[1]["reason"], "out of scope");
+        assert!(broker
+            .resolve_signoff(1, SignoffDecision::Deny("x".into()))
+            .is_err());
+    }
+
+    #[test]
+    fn signoff_expires_through_reaper() {
+        let key = SoftKey::new(13);
+        let (broker, path) = broker_with_signoff("expire", &key, 1);
+        let peer = register_with(&broker, 1, "wire-1");
+        broker.apply_ask(1, "confirm".to_string(), falco("r"));
+        broker.apply_seen(1);
+        // Normal TTL would not touch a held entry...
+        assert_eq!(broker.reap_stale(Duration::from_millis(0)), 0);
+        std::thread::sleep(Duration::from_millis(1100));
+        // ...but the sign-off TTL does.
+        assert_eq!(broker.reap_stale(Duration::from_secs(3600)), 1);
+        let resp = read_response_json(&peer);
+        assert_eq!(resp["decision"], "deny");
+        assert!(resp["reason"].as_str().unwrap().contains("expired"));
+        let recs = audit_records(&path);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[1]["kind"], "signoff");
+        assert_eq!(recs[1]["decision"], "expired");
+        assert_eq!(broker.pending_count(), 0);
+    }
+
+    #[test]
+    fn signoff_only_holds_ask() {
+        let key = SoftKey::new(14);
+        let (broker, path) = broker_with_signoff("onlyask", &key, 300);
+        let p1 = register_with(&broker, 1, "wire-1");
+        broker.apply_deny(1, "blocked".to_string(), falco("r"));
+        assert_eq!(read_response_json(&p1)["decision"], "deny");
+        broker.apply_seen(1);
+        let p2 = register_with(&broker, 2, "wire-2");
+        broker.apply_seen(2);
+        assert_eq!(read_response_json(&p2)["decision"], "allow");
+        assert!(broker.held_requests().is_empty());
+        assert_eq!(broker.pending_count(), 0);
+        let recs = audit_records(&path);
+        assert!(recs.iter().all(|r| r["signoff"]["status"] == "none"));
+    }
+
+    #[test]
+    fn signoff_not_applied_in_monitor_mode() {
+        let key = SoftKey::new(15);
+        let (broker, _path) = broker_with_signoff("monitor", &key, 300);
+        broker.set_monitor_mode(true);
+        let peer = register_with(&broker, 1, "wire-1");
+        broker.apply_ask(1, "would-ask".to_string(), falco("r"));
+        broker.apply_seen(1);
+        assert_eq!(read_response_json(&peer)["decision"], "defer");
+        assert!(broker.held_requests().is_empty());
+    }
+
+    #[test]
+    fn signoff_disabled_returns_ask_as_before() {
+        let (broker, _path) = broker_with_audit("nosignoff");
+        let peer = register_with(&broker, 1, "wire-1");
+        assert!(broker
+            .resolve_signoff(1, SignoffDecision::Deny("x".into()))
+            .unwrap_err()
+            .contains("not enabled"));
+        broker.apply_ask(1, "confirm".to_string(), falco("r"));
+        broker.apply_seen(1);
+        assert_eq!(read_response_json(&peer)["decision"], "ask");
     }
 
     #[test]

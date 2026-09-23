@@ -55,6 +55,20 @@ plugins:
         workers: 4
         # Tools never sent to the model, e.g. [Read, Glob, Grep].
         skip_tools: []
+      # Hardware-key (FIDO2 / YubiKey) sign-off: every ask verdict, from a
+      # Falco rule or the LLM monitor, is held in the broker until an
+      # operator approves it with an enrolled key (premptictl signoff
+      # approve) or denies it; unanswered holds are denied after ttl_secs.
+      # Requires audit_enabled (the key signs the audit record hash) and at
+      # least one key in keys_path (premptictl signoff enroll).
+      # Manage with: premptictl signoff status|enroll|list|approve|deny|watch
+      signoff:
+        enabled: false
+        ttl_secs: 300
+        rp_id: prempti.local
+        # Require PIN / biometric (user verification), not just a touch.
+        require_uv: false
+        keys_path: ${HOME}/.prempti/config/signoff_keys.json
 
 load_plugins:
   - coding_agent

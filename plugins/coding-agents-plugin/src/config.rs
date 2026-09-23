@@ -82,6 +82,87 @@ pub struct CodingAgentConfig {
     /// LLM monitor (second verdict source). Disabled unless `monitor.enabled`.
     #[serde(default)]
     pub monitor: MonitorConfig,
+
+    /// Hardware-key sign-off for `ask` verdicts. Disabled unless
+    /// `signoff.enabled`.
+    #[serde(default)]
+    pub signoff: SignoffConfig,
+}
+
+/// Hardware-key (FIDO2) sign-off. When enabled, an `ask` verdict is held in
+/// the broker instead of being returned to the agent, until an operator
+/// approves it with an enrolled authenticator (`premptictl signoff approve`)
+/// or denies it, or `ttl_secs` elapse (deny). Requires `audit_enabled`: the
+/// challenge the authenticator signs is the held request's audit record hash.
+#[derive(Deserialize, JsonSchema, Clone, Debug)]
+#[schemars(crate = "falco_plugin::schemars")]
+#[serde(crate = "falco_plugin::serde")]
+pub struct SignoffConfig {
+    /// Enable sign-off. Default false.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// How long a held request waits for the operator before it is denied.
+    /// The Claude Code hook timeout is derived from it. Default 300.
+    #[serde(default = "default_signoff_ttl_secs")]
+    pub ttl_secs: u64,
+
+    /// Enrolled authenticators (`premptictl signoff enroll`). Read once at
+    /// init. Default `$HOME/.prempti/config/signoff_keys.json`.
+    #[serde(default = "default_signoff_keys_path")]
+    pub keys_path: String,
+
+    /// FIDO2 relying-party id the credentials were enrolled under. Must
+    /// match what `premptictl` uses. Default `prempti.local`.
+    #[serde(default = "default_signoff_rp_id")]
+    pub rp_id: String,
+
+    /// Require user verification (PIN / biometric) on the assertion, not
+    /// just user presence (touch). Default false.
+    #[serde(default)]
+    pub require_uv: bool,
+}
+
+impl Default for SignoffConfig {
+    fn default() -> Self {
+        SignoffConfig {
+            enabled: false,
+            ttl_secs: default_signoff_ttl_secs(),
+            keys_path: default_signoff_keys_path(),
+            rp_id: default_signoff_rp_id(),
+            require_uv: false,
+        }
+    }
+}
+
+fn default_signoff_ttl_secs() -> u64 {
+    300
+}
+
+fn default_signoff_rp_id() -> String {
+    "prempti.local".to_string()
+}
+
+fn default_signoff_keys_path() -> String {
+    #[cfg(unix)]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{home}/.prempti/config/signoff_keys.json")
+        } else {
+            "/etc/prempti/signoff_keys.json".to_string()
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            format!(
+                "{}/prempti/config/signoff_keys.json",
+                local.replace('\\', "/")
+            )
+        } else {
+            "C:/prempti-signoff_keys.json".to_string()
+        }
+    }
 }
 
 /// LLM monitor settings. The monitor reviews every tool call (minus

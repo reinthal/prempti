@@ -1,0 +1,30 @@
+/* Page shell. Everything a component does not own: the document, the sticky
+   chrome, the two-column split and the empty state. */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--surface-canvas);
+  color: var(--ink);
+  font: 400 13px/1.45 var(--font-mono);
+}
+.chrome { position: sticky; top: 0; z-index: 3; }
+main { display: grid; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) {
+  main.is-open { grid-template-columns: minmax(0, 1fr) minmax(380px, 40%); }
+  main.is-open .detail-slot {
+    position: sticky;
+    top: var(--chrome-h, 96px);
+    align-self: start;
+    max-height: calc(100vh - var(--chrome-h, 96px));
+    overflow: auto;
+  }
+}
+.trail { min-width: 0; }
+.k-row-head {
+  position: sticky;
+  top: var(--chrome-h, 96px);
+  z-index: 1;
+  background: var(--surface-canvas);
+}
+.empty { padding: var(--space-40); text-align: center; color: var(--ink-dim); }
+.detail-slot:empty { display: none; }

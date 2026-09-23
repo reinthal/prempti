@@ -9,6 +9,8 @@
 {
   lib,
   rustPlatform,
+  pkg-config,
+  udev,
 }:
 let
   cargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
@@ -33,6 +35,11 @@ rustPlatform.buildRustPackage {
   };
 
   cargoLock.lockFile = ../Cargo.lock;
+
+  # `premptictl signoff enroll|approve` talk to FIDO2 keys over USB HID
+  # (ctap-hid-fido2 -> hidapi, built from source against libudev).
+  nativeBuildInputs = [ pkg-config ];
+  buildInputs = [ udev ];
 
   cargoBuildFlags = [
     "-p" "claude-interceptor"

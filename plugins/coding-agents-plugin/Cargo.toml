@@ -20,6 +20,9 @@ anyhow = "1"
 log = "0.4"
 getrandom = "0.4"
 sha2 = "0.10"
+# Hardware-key sign-off: ES256 (ECDSA P-256) verification of FIDO2
+# assertions. Pure Rust, no HID access in the plugin.
+p256 = "0.14"
 # LLM monitor HTTP client. rustls (pure Rust) rather than native-tls: the
 # plugin is a cdylib loaded into Falco, which already links libcurl/OpenSSL;
 # a second OpenSSL in the same process is asking for symbol trouble.

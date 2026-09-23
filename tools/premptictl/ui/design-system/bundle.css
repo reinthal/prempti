@@ -1,0 +1,224 @@
+/* Kebnetrails component stylesheet. Loads after tokens.css; every value here
+   is a token or a layout number the components own. */
+
+.k-badge,
+.k-btn,
+.k-chain,
+.k-code,
+.k-detail,
+.k-filters,
+.k-row,
+.k-statbar,
+.k-toolcall {
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+}
+
+/* ---- type ---- */
+.k-title { font: 600 14px/1.45 var(--font-mono); color: var(--ink); margin: 0; }
+.k-meta { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); }
+.k-tool { font: 600 13px/1.45 var(--font-mono); color: var(--ink); }
+
+/* ---- VerdictBadge ---- */
+.k-badge {
+  display: inline-block;
+  padding: var(--space-2) 7px;
+  border-radius: var(--radius-pill);
+  font: 600 12px/1.45 var(--font-mono);
+  white-space: nowrap;
+}
+.k-badge-allow { background: var(--allow-ground); color: var(--allow); }
+.k-badge-ask { background: var(--ask-ground); color: var(--ask); }
+.k-badge-deny { background: var(--deny-ground); color: var(--deny); }
+.k-badge-defer,
+.k-badge-none { background: var(--defer-ground); color: var(--defer); }
+.k-badge-pair { display: inline-flex; align-items: baseline; gap: var(--space-4); min-width: 0; }
+.k-badge-pair .k-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- ChainStatus ---- */
+.k-chain {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-2) var(--space-8);
+  border-radius: var(--radius-sm);
+  font: 600 12px/1.45 var(--font-mono);
+}
+.k-chain-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: currentColor; flex: none; }
+.k-chain-ok { background: var(--allow-ground); color: var(--allow); }
+.k-chain-broken { background: var(--deny-ground); color: var(--deny); }
+.k-chain-unknown { background: var(--defer-ground); color: var(--defer); }
+
+/* ---- buttons and controls ---- */
+.k-btn {
+  background: var(--surface-canvas);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-10);
+  font: 400 13px/1.45 var(--font-mono);
+  cursor: pointer;
+}
+.k-btn:hover { border-color: var(--ink-dim); }
+.k-btn.is-on { border-color: var(--accent); color: var(--accent); }
+.k-btn-quiet { background: none; border-color: transparent; color: var(--ink-dim); padding: var(--space-2) var(--space-6); font-size: 12px; }
+.k-btn-quiet:hover { color: var(--ink); border-color: var(--line); }
+.k-input,
+.k-select {
+  background: var(--surface-canvas);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-8);
+  font: 400 13px/1.45 var(--font-mono);
+}
+.k-btn:focus-visible,
+.k-input:focus-visible,
+.k-select:focus-visible,
+.k-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- syntax ---- */
+.k-syn-cmd { color: var(--syn-cmd); font-weight: 600; }
+.k-syn-key { color: var(--syn-key); }
+.k-syn-string { color: var(--syn-string); }
+.k-syn-number { color: var(--syn-number); }
+.k-syn-literal { color: var(--syn-literal); }
+.k-syn-punct { color: var(--syn-punct); }
+.k-syn-plain { color: var(--ink); }
+mark.k-syn-danger {
+  background: none;
+  color: var(--syn-danger);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+/* A flagged clause longer than a word keeps its syntax colours; only the
+   underline carries the flag, so a whole pipeline does not go red. */
+mark.k-syn-clause {
+  color: inherit;
+  text-decoration-color: var(--syn-danger);
+  text-decoration-thickness: 2px;
+}
+
+/* ---- ToolCall ---- */
+.k-toolcall { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
+.k-toolcall-head { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
+.k-toolcall-tool { font: 600 13px/1.45 var(--font-mono); color: var(--ink); }
+.k-toolcall-lang { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); }
+.k-toolcall-head .k-btn-quiet { margin-left: auto; }
+.k-toolcall-more { align-self: flex-start; }
+.k-toolcall-extras { overflow-wrap: anywhere; }
+.k-code {
+  margin: 0;
+  padding: var(--space-8);
+  background: var(--surface-canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font: 400 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+}
+.k-code-clamped { max-height: calc(var(--k-clamp, 12) * 1.45em + 2 * var(--space-8)); }
+
+/* ---- RecordRow ---- */
+.k-row {
+  display: grid;
+  grid-template-columns: 3px 72px 48px 116px 150px minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-10);
+  padding: var(--space-6) var(--space-16) var(--space-6) 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font: 400 13px/1.45 var(--font-mono);
+  color: var(--ink);
+}
+.k-row:hover { background: var(--surface-hover); }
+.k-row.is-selected { background: var(--surface-selected); }
+.k-lane { align-self: stretch; background: var(--defer-ground); }
+.k-row-allow .k-lane { background: var(--allow-ground); }
+.k-row-ask .k-lane { background: var(--ask-ground); }
+.k-row-deny .k-lane { background: var(--deny); }
+.k-row.is-selected .k-lane { background: var(--accent); }
+/* Compact: sequence and session go first, so the call keeps its width when the
+   detail panel takes half the page, or the window is narrow. */
+.k-rows-compact .k-row,
+.k-row-compact { grid-template-columns: 3px 72px 140px minmax(0, 1fr) auto auto; }
+.k-rows-compact .k-seq,
+.k-rows-compact .k-session,
+.k-row-compact .k-seq,
+.k-row-compact .k-session { display: none; }
+.k-row-head { cursor: default; color: var(--ink-dim); font-size: 12px; }
+.k-row-head:hover { background: none; }
+.k-row-head .k-lane { background: none; }
+.k-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-seq { text-align: right; }
+.k-summary { font-size: 12px; }
+.k-signals { display: flex; align-items: baseline; gap: var(--space-8); white-space: nowrap; }
+.k-llm-error { color: var(--deny); }
+/* Responsive: these come last so they win over the column rules above. */
+@media (max-width: 900px) {
+  .k-row { grid-template-columns: 3px 72px 140px minmax(0, 1fr) auto auto; }
+  .k-seq, .k-session { display: none; }
+}
+/* Phone width: the call and its verdict. Everything else is in the detail. */
+@media (max-width: 680px) {
+  .k-row { grid-template-columns: 3px minmax(0, 1fr) auto; gap: var(--space-8); }
+  .k-time, .k-tool, .k-signals { display: none; }
+}
+
+/* ---- FilterBar ---- */
+.k-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--line);
+}
+.k-input-search { flex: 1 1 260px; min-width: 200px; }
+.k-field { display: flex; align-items: center; gap: var(--space-6); }
+.k-field-label { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); }
+
+/* ---- StatBar ---- */
+.k-statbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-12) var(--space-20);
+  padding: var(--space-10) var(--space-16);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--line);
+}
+.k-counts { display: flex; align-items: baseline; gap: var(--space-20); }
+.k-count { display: inline-flex; align-items: baseline; gap: var(--space-6); }
+.k-count b { font: 600 13px/1.45 var(--font-mono); color: var(--ink); }
+.k-count-allow b { color: var(--allow); }
+.k-count-ask b { color: var(--ask); }
+.k-count-deny b { color: var(--deny); }
+.k-count-defer b { color: var(--defer); }
+.k-tools { display: flex; align-items: center; gap: var(--space-8); margin-left: auto; }
+
+/* ---- RecordDetail ---- */
+.k-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-16);
+  background: var(--surface-panel);
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+.k-detail-head { display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }
+.k-detail-close { margin-left: auto; font-size: 14px; }
+.k-detail-verdict { display: flex; flex-direction: column; gap: var(--space-6); }
+.k-reason { margin: 0; font: 400 13px/1.45 var(--font-mono); color: var(--ink); }
+.k-kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-6) var(--space-10); margin: 0; }
+.k-kv dt { margin: 0; }
+.k-dd { margin: 0; min-width: 0; font: 400 13px/1.45 var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+.k-stack { display: flex; flex-direction: column; gap: var(--space-6); align-items: flex-start; }
+.k-stack-line { display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }
+.k-rule { display: flex; flex-direction: column; gap: var(--space-2); }
+.k-rule-name { font: 600 12px/1.45 var(--font-mono); color: var(--ink); }
+.k-hash { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); overflow-wrap: anywhere; }

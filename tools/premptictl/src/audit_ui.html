@@ -1,200 +1,1152 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Prempti audit trail</title>
+<title>Kebnetrails audit trail</title>
+<!-- Generated file. Built from the Kebnetrails design system:
+     tokens.css + components/bundle.css + components/bundle.js, plus the page
+     shell and app logic. Edit the sources, not this file. -->
 <style>
-  :root {
-    --bg: #14161a; --panel: #1c1f25; --line: #2a2e36; --fg: #d7dae0; --dim: #8b919c;
-    --allow: #3fb950; --ask: #d29922; --deny: #f85149; --defer: #8b949e; --accent: #58a6ff;
+/* Kebnetrails design tokens — compiled from the design system's tokens.json.
+   Do not hand-edit: change tokens.json in the design system and rebuild. */
+:root, [data-theme="dark"] {
+  --surface-canvas: #14161a;
+  --surface-panel: #1c1f25;
+  --surface-hover: #1a1d23;
+  --surface-selected: #1e2530;
+  --line: #2a2e36;
+  --ink: #d7dae0;
+  --ink-dim: #8b919c;
+  --accent: #58a6ff;
+  --allow: #3fb950;
+  --allow-ground: #1f3a26;
+  --ask: #d29922;
+  --ask-ground: #3a2f12;
+  --deny: #f85149;
+  --deny-ground: #3a1f1f;
+  --defer: #8b949e;
+  --defer-ground: #2a2e36;
+  --syn-cmd: #f0f3f6;
+  --syn-key: #79c0ff;
+  --syn-string: #a5d6ff;
+  --syn-number: #ffa657;
+  --syn-literal: #d2a8ff;
+  --syn-punct: #838b95;
+  --syn-danger: #ff7b72;
+}
+:root {
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-40: 40px;
+  --radius-sm: 4px;
+  --radius-pill: 10px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.title { font-family: var(--font-mono); font-size: 14px; line-height: 1.45; font-weight: 600; }
+.body { font-family: var(--font-mono); font-size: 13px; line-height: 1.45; font-weight: 400; }
+.body-strong { font-family: var(--font-mono); font-size: 13px; line-height: 1.45; font-weight: 600; }
+.meta { font-family: var(--font-mono); font-size: 12px; line-height: 1.45; font-weight: 400; }
+.badge { font-family: var(--font-mono); font-size: 12px; line-height: 1.45; font-weight: 600; }
+.code { font-family: var(--font-mono); font-size: 12px; line-height: 1.45; font-weight: 400; }
+
+/* Kebnetrails component stylesheet. Loads after tokens.css; every value here
+   is a token or a layout number the components own. */
+
+.k-badge,
+.k-btn,
+.k-chain,
+.k-code,
+.k-detail,
+.k-filters,
+.k-row,
+.k-statbar,
+.k-toolcall {
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+}
+
+/* ---- type ---- */
+.k-title { font: 600 14px/1.45 var(--font-mono); color: var(--ink); margin: 0; }
+.k-meta { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); }
+.k-tool { font: 600 13px/1.45 var(--font-mono); color: var(--ink); }
+
+/* ---- VerdictBadge ---- */
+.k-badge {
+  display: inline-block;
+  padding: var(--space-2) 7px;
+  border-radius: var(--radius-pill);
+  font: 600 12px/1.45 var(--font-mono);
+  white-space: nowrap;
+}
+.k-badge-allow { background: var(--allow-ground); color: var(--allow); }
+.k-badge-ask { background: var(--ask-ground); color: var(--ask); }
+.k-badge-deny { background: var(--deny-ground); color: var(--deny); }
+.k-badge-defer,
+.k-badge-none { background: var(--defer-ground); color: var(--defer); }
+.k-badge-pair { display: inline-flex; align-items: baseline; gap: var(--space-4); min-width: 0; }
+.k-badge-pair .k-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- ChainStatus ---- */
+.k-chain {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-2) var(--space-8);
+  border-radius: var(--radius-sm);
+  font: 600 12px/1.45 var(--font-mono);
+}
+.k-chain-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: currentColor; flex: none; }
+.k-chain-ok { background: var(--allow-ground); color: var(--allow); }
+.k-chain-broken { background: var(--deny-ground); color: var(--deny); }
+.k-chain-unknown { background: var(--defer-ground); color: var(--defer); }
+
+/* ---- buttons and controls ---- */
+.k-btn {
+  background: var(--surface-canvas);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-10);
+  font: 400 13px/1.45 var(--font-mono);
+  cursor: pointer;
+}
+.k-btn:hover { border-color: var(--ink-dim); }
+.k-btn.is-on { border-color: var(--accent); color: var(--accent); }
+.k-btn-quiet { background: none; border-color: transparent; color: var(--ink-dim); padding: var(--space-2) var(--space-6); font-size: 12px; }
+.k-btn-quiet:hover { color: var(--ink); border-color: var(--line); }
+.k-input,
+.k-select {
+  background: var(--surface-canvas);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-8);
+  font: 400 13px/1.45 var(--font-mono);
+}
+.k-btn:focus-visible,
+.k-input:focus-visible,
+.k-select:focus-visible,
+.k-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- syntax ---- */
+.k-syn-cmd { color: var(--syn-cmd); font-weight: 600; }
+.k-syn-key { color: var(--syn-key); }
+.k-syn-string { color: var(--syn-string); }
+.k-syn-number { color: var(--syn-number); }
+.k-syn-literal { color: var(--syn-literal); }
+.k-syn-punct { color: var(--syn-punct); }
+.k-syn-plain { color: var(--ink); }
+mark.k-syn-danger {
+  background: none;
+  color: var(--syn-danger);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+/* A flagged clause longer than a word keeps its syntax colours; only the
+   underline carries the flag, so a whole pipeline does not go red. */
+mark.k-syn-clause {
+  color: inherit;
+  text-decoration-color: var(--syn-danger);
+  text-decoration-thickness: 2px;
+}
+
+/* ---- ToolCall ---- */
+.k-toolcall { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
+.k-toolcall-head { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
+.k-toolcall-tool { font: 600 13px/1.45 var(--font-mono); color: var(--ink); }
+.k-toolcall-lang { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); }
+.k-toolcall-head .k-btn-quiet { margin-left: auto; }
+.k-toolcall-more { align-self: flex-start; }
+.k-toolcall-extras { overflow-wrap: anywhere; }
+.k-code {
+  margin: 0;
+  padding: var(--space-8);
+  background: var(--surface-canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font: 400 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+}
+.k-code-clamped { max-height: calc(var(--k-clamp, 12) * 1.45em + 2 * var(--space-8)); }
+
+/* ---- RecordRow ---- */
+.k-row {
+  display: grid;
+  grid-template-columns: 3px 72px 48px 116px 150px minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-10);
+  padding: var(--space-6) var(--space-16) var(--space-6) 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font: 400 13px/1.45 var(--font-mono);
+  color: var(--ink);
+}
+.k-row:hover { background: var(--surface-hover); }
+.k-row.is-selected { background: var(--surface-selected); }
+.k-lane { align-self: stretch; background: var(--defer-ground); }
+.k-row-allow .k-lane { background: var(--allow-ground); }
+.k-row-ask .k-lane { background: var(--ask-ground); }
+.k-row-deny .k-lane { background: var(--deny); }
+.k-row.is-selected .k-lane { background: var(--accent); }
+/* Compact: sequence and session go first, so the call keeps its width when the
+   detail panel takes half the page, or the window is narrow. */
+.k-rows-compact .k-row,
+.k-row-compact { grid-template-columns: 3px 72px 140px minmax(0, 1fr) auto auto; }
+.k-rows-compact .k-seq,
+.k-rows-compact .k-session,
+.k-row-compact .k-seq,
+.k-row-compact .k-session { display: none; }
+.k-row-head { cursor: default; color: var(--ink-dim); font-size: 12px; }
+.k-row-head:hover { background: none; }
+.k-row-head .k-lane { background: none; }
+.k-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-seq { text-align: right; }
+.k-summary { font-size: 12px; }
+.k-signals { display: flex; align-items: baseline; gap: var(--space-8); white-space: nowrap; }
+.k-llm-error { color: var(--deny); }
+.k-row-signoff .k-lane { background: var(--accent); }
+.k-row-signoff .k-summary { color: var(--ink-dim); }
+.k-badge-signoff { background: var(--surface-selected); color: var(--accent); }
+
+/* ---- SignoffBanner: calls the broker holds for a hardware-key sign-off ---- */
+.k-signoff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-8) var(--space-16);
+  background: var(--ask-ground);
+  color: var(--ask);
+  border-bottom: 1px solid var(--line);
+  font: 600 13px/1.45 var(--font-mono);
+}
+.k-signoff-item { display: inline-flex; align-items: baseline; gap: var(--space-8); font-weight: 400; color: var(--ink); min-width: 0; }
+.k-signoff-item .k-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
+.k-signoff-cmd { color: var(--ink-dim); font-weight: 400; }
+/* Responsive: these come last so they win over the column rules above. */
+@media (max-width: 900px) {
+  .k-row { grid-template-columns: 3px 72px 140px minmax(0, 1fr) auto auto; }
+  .k-seq, .k-session { display: none; }
+}
+/* Phone width: the call and its verdict. Everything else is in the detail. */
+@media (max-width: 680px) {
+  .k-row { grid-template-columns: 3px minmax(0, 1fr) auto; gap: var(--space-8); }
+  .k-time, .k-tool, .k-signals { display: none; }
+}
+
+/* ---- FilterBar ---- */
+.k-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--line);
+}
+.k-input-search { flex: 1 1 260px; min-width: 200px; }
+.k-field { display: flex; align-items: center; gap: var(--space-6); }
+.k-field-label { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); }
+
+/* ---- StatBar ---- */
+.k-statbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-12) var(--space-20);
+  padding: var(--space-10) var(--space-16);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--line);
+}
+.k-counts { display: flex; align-items: baseline; gap: var(--space-20); }
+.k-count { display: inline-flex; align-items: baseline; gap: var(--space-6); }
+.k-count b { font: 600 13px/1.45 var(--font-mono); color: var(--ink); }
+.k-count-allow b { color: var(--allow); }
+.k-count-ask b { color: var(--ask); }
+.k-count-deny b { color: var(--deny); }
+.k-count-defer b { color: var(--defer); }
+.k-tools { display: flex; align-items: center; gap: var(--space-8); margin-left: auto; }
+
+/* ---- RecordDetail ---- */
+.k-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-16);
+  background: var(--surface-panel);
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+.k-detail-head { display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }
+.k-detail-close { margin-left: auto; font-size: 14px; }
+.k-detail-verdict { display: flex; flex-direction: column; gap: var(--space-6); }
+.k-reason { margin: 0; font: 400 13px/1.45 var(--font-mono); color: var(--ink); }
+.k-kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-6) var(--space-10); margin: 0; }
+.k-kv dt { margin: 0; }
+.k-dd { margin: 0; min-width: 0; font: 400 13px/1.45 var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+.k-stack { display: flex; flex-direction: column; gap: var(--space-6); align-items: flex-start; }
+.k-stack-line { display: flex; align-items: baseline; gap: var(--space-8); flex-wrap: wrap; }
+.k-rule { display: flex; flex-direction: column; gap: var(--space-2); }
+.k-rule-name { font: 600 12px/1.45 var(--font-mono); color: var(--ink); }
+.k-hash { font: 400 12px/1.45 var(--font-mono); color: var(--ink-dim); overflow-wrap: anywhere; }
+
+/* Page shell. Everything a component does not own: the document, the sticky
+   chrome, the two-column split and the empty state. */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--surface-canvas);
+  color: var(--ink);
+  font: 400 13px/1.45 var(--font-mono);
+}
+.chrome { position: sticky; top: 0; z-index: 3; }
+main { display: grid; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) {
+  main.is-open { grid-template-columns: minmax(0, 1fr) minmax(380px, 40%); }
+  main.is-open .detail-slot {
+    position: sticky;
+    top: var(--chrome-h, 96px);
+    align-self: start;
+    max-height: calc(100vh - var(--chrome-h, 96px));
+    overflow: auto;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
-  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
-  .stat { color: var(--dim); }
-  .stat b { color: var(--fg); }
-  .chain { padding: 2px 8px; border-radius: 4px; font-weight: 600; }
-  .chain.ok { background: #1f3a26; color: var(--allow); }
-  .chain.bad { background: #3a1f1f; color: var(--deny); }
-  .chain.unk { background: #2a2e36; color: var(--dim); }
-  .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-  .filters input, .filters select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
-  .filters input[type=text] { flex: 1 1 260px; }
-  .filters label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
-  main { display: grid; grid-template-columns: 1fr; }
-  @media (min-width: 1100px) { main.open { grid-template-columns: 1fr minmax(380px, 40%); } }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
-  th { color: var(--dim); font-weight: 600; position: sticky; top: 0; background: var(--bg); }
-  td.wrap { white-space: normal; word-break: break-all; max-width: 42ch; }
-  tr.row { cursor: pointer; }
-  tr.row:hover { background: #1a1d23; }
-  tr.row.sel { background: #1e2530; }
-  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; }
-  .b-allow { background: #1f3a26; color: var(--allow); }
-  .b-ask { background: #3a2f12; color: var(--ask); }
-  .b-deny { background: #3a1f1f; color: var(--deny); }
-  .b-defer, .b-none { background: #2a2e36; color: var(--defer); }
-  .src { color: var(--dim); }
-  .llm-err { color: var(--deny); }
-  .llm-skip { color: var(--dim); }
-  aside { border-left: 1px solid var(--line); background: var(--panel); padding: 12px 16px; overflow: auto; position: sticky; top: 46px; height: calc(100vh - 46px); }
-  aside h2 { font-size: 13px; margin: 0 0 8px; color: var(--dim); font-weight: 600; }
-  aside .kv { margin: 0 0 10px; }
-  aside .kv dt { color: var(--dim); }
-  aside .kv dd { margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; }
-  aside pre { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
-  .close { float: right; background: none; border: 1px solid var(--line); color: var(--dim); border-radius: 4px; cursor: pointer; font: inherit; padding: 2px 8px; }
-  .empty { padding: 40px; text-align: center; color: var(--dim); }
-  .tools { display: flex; gap: 8px; align-items: center; margin-left: auto; }
-  .tools button { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
-  .tools button.on { border-color: var(--accent); color: var(--accent); }
+}
+.trail { min-width: 0; }
+.k-row-head {
+  position: sticky;
+  top: var(--chrome-h, 96px);
+  z-index: 1;
+  background: var(--surface-canvas);
+}
+.empty { padding: var(--space-40); text-align: center; color: var(--ink-dim); }
+.detail-slot:empty { display: none; }
+
 </style>
 </head>
 <body>
-<header>
-  <h1>Prempti audit trail</h1>
-  <span class="stat">records <b id="n-total">0</b></span>
-  <span class="stat">allow <b id="n-allow">0</b></span>
-  <span class="stat">ask <b id="n-ask">0</b></span>
-  <span class="stat">deny <b id="n-deny">0</b></span>
-  <span class="stat">defer <b id="n-defer">0</b></span>
-  <span class="stat">llm ok <b id="n-llm-ok">0</b> · err <b id="n-llm-err">0</b></span>
-  <span id="chain" class="chain unk">chain: checking…</span>
-  <div class="tools">
-    <button id="follow" class="on" title="Auto-scroll to newest">follow</button>
-    <button id="verify" title="Re-verify the hash chain now">verify</button>
-  </div>
-</header>
-<div class="filters">
-  <input id="q" type="text" placeholder="search tool input, reasons, rules, session…">
-  <label>final <select id="f-final"><option value="">any</option><option>allow</option><option>ask</option><option>deny</option><option>defer</option></select></label>
-  <label>source <select id="f-source"><option value="">any</option><option>falco</option><option>llm</option><option>floor</option><option>monitor</option><option>passthrough</option><option>reaper</option><option>broker</option></select></label>
-  <label>llm <select id="f-llm"><option value="">any</option><option value="ok">ok</option><option value="error">error</option><option value="skipped">skipped</option><option value="disabled">disabled</option></select></label>
-  <label>session <select id="f-session"><option value="">any</option></select></label>
-  <label>tool <select id="f-tool"><option value="">any</option></select></label>
+<div id="chrome" class="chrome">
+  <div id="stat"></div>
+  <div id="signoff"></div>
+  <div id="filters"></div>
 </div>
 <main id="main">
-  <div id="list">
-    <table>
-      <thead><tr>
-        <th>time</th><th>#</th><th>session</th><th>tool</th><th>input</th><th>falco</th><th>llm</th><th>final</th>
-      </tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
+  <div class="trail">
+    <div id="head"></div>
+    <div id="rows"></div>
     <div id="empty" class="empty">No audit records yet. They appear as the agent makes tool calls.</div>
   </div>
-  <aside id="detail" hidden></aside>
+  <div id="detail" class="detail-slot"></div>
 </main>
 <script>
-(() => {
-  const records = [];
-  const byId = new Map();
-  let lastSeq = 0, selected = null, follow = true;
-  const $ = id => document.getElementById(id);
-  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const fmtTs = ms => { const d = new Date(ms); return d.toLocaleTimeString([], {hour12:false}) + '.' + String(d.getMilliseconds()).padStart(3,'0'); };
-  const fmtDate = ms => new Date(ms).toLocaleString([], {hour12:false});
+/* @ds-bundle: {"format":4,"namespace":"Kebnetrails","components":[{"name":"VerdictBadge"},{"name":"ChainStatus"},{"name":"ToolCall"},{"name":"RecordRow"},{"name":"FilterBar"},{"name":"RecordDetail"},{"name":"StatBar"}]} */
+(function (root) {
+  'use strict';
 
-  function inputSummary(r) {
-    const t = r.tool || {}; let s = t.input || '';
-    try { const j = JSON.parse(s); s = j.command || j.file_path || j.pattern || j.url || j.prompt || j.description || s; if (typeof s !== 'string') s = JSON.stringify(s); } catch (_) {}
-    return s.replace(/\s+/g, ' ');
+  /* ---------- primitives ---------- */
+
+  var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ESC[c]; }); }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
   }
-  function llmCell(r) {
-    const l = r.llm || {}; const st = l.status || '';
-    if (st === 'ok') return `<span class="badge b-${esc(l.verdict)}">${esc(l.verdict)}</span> <span class="src">${l.latency_ms}ms</span>`;
-    if (st.startsWith('error')) return `<span class="llm-err" title="${esc(l.reason)}">${esc(st)}</span>`;
-    return `<span class="llm-skip">${esc(st)}</span>`;
+
+  /* ---------- danger patterns ---------- */
+
+  // Substrings that earned a verdict often enough to be worth marking on sight.
+  // Consumers may replace this array; every entry is a RegExp with the g flag.
+  var DANGER = [
+    /\brm\s+-[a-z]*[rf][a-z]*\b/g,
+    /\bsudo\b/g,
+    /\bchmod\s+(?:-R\s+)?777\b/g,
+    /\bcurl\b[^|;&]*\|\s*(?:ba|z|)sh\b/g,
+    /\b(?:eval|source)\s/g,
+    /\bbase64\s+-{1,2}d(?:ecode)?\b/g,
+    /--(?:force|no-verify|hard)\b/g,
+    /(?:^|[\s"'/])(?:\.env(?:\.[\w-]+)?|id_[a-z]+|credentials|secrets?\.(?:env|json|ya?ml))\b/g,
+    /(?:~\/\.ssh|\/etc\/(?:passwd|shadow|sudoers))\b/g,
+    /\bgit\s+push\b[^|;&]*--force/g,
+    />\s*\/dev\/sd[a-z]\b/g
+  ];
+
+  /* ---------- tokenizers: emit [start, end, class] over the source text ---------- */
+
+  var BASH_BREAK = /^(?:\|\||&&|;;|[|;&(){}\n])$/;
+
+  function tokenizeBash(s) {
+    var out = [], i = 0, n = s.length, atHead = true;
+    function push(a, b, c) { if (b > a) out.push([a, b, c]); }
+    while (i < n) {
+      var ch = s[i];
+      if (ch === ' ' || ch === '\t' || ch === '\n') { if (ch === '\n') atHead = true; i++; continue; }
+      if (ch === '#' && (i === 0 || /\s/.test(s[i - 1]))) {
+        var e = s.indexOf('\n', i); e = e < 0 ? n : e; push(i, e, 'punct'); i = e; continue;
+      }
+      if (ch === '"' || ch === "'") {
+        var q = i + 1;
+        while (q < n && s[q] !== ch) { if (s[q] === '\\' && ch === '"') q++; q++; }
+        push(i, Math.min(q + 1, n), 'string'); i = q + 1; atHead = false; continue;
+      }
+      if (ch === '$') {
+        var m = /^\$(?:\{[^}]*\}|\([^)]*\)|[A-Za-z_][\w]*|[?#@*!$0-9])/.exec(s.slice(i));
+        if (m) { push(i, i + m[0].length, 'literal'); i += m[0].length; atHead = false; continue; }
+      }
+      var op = /^(?:\|\||&&|>>|2>&1|<<|[|;&<>()=])/.exec(s.slice(i));
+      if (op) {
+        push(i, i + op[0].length, 'punct');
+        if (BASH_BREAK.test(op[0]) || op[0] === '&&' || op[0] === '||') atHead = true;
+        i += op[0].length; continue;
+      }
+      var w = /^[^\s|;&<>()"'$]+/.exec(s.slice(i));
+      if (!w) { i++; continue; }
+      var t = w[0], cls;
+      if (atHead) cls = 'cmd';
+      else if (t[0] === '-') cls = 'key';
+      else if (/^-?\d+(?:\.\d+)?$/.test(t)) cls = 'number';
+      else if (/[/~]/.test(t) || /^[\w.-]+\.[a-z]{2,4}$/i.test(t)) cls = 'string';
+      else cls = 'plain';
+      push(i, i + t.length, cls);
+      i += t.length;
+      atHead = false;
+    }
+    return out;
   }
-  function falcoCell(r) {
-    const f = r.falco || {}; const rules = (f.rules || []).map(x => x.rule);
-    const v = f.verdict || 'none';
-    return `<span class="badge b-${esc(v)}">${esc(v)}</span>${rules.length ? ` <span class="src" title="${esc(rules.join('\n'))}">${esc(rules[0])}${rules.length > 1 ? ' +' + (rules.length - 1) : ''}</span>` : ''}`;
+
+  var JSON_RE = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)|\b(true|false|null)\b|([{}[\],:])/g;
+
+  function tokenizeJson(s) {
+    var out = [], m;
+    JSON_RE.lastIndex = 0;
+    while ((m = JSON_RE.exec(s))) {
+      if (m[1]) out.push([m.index, m.index + m[1].length, m[2] ? 'key' : 'string']);
+      if (m[2]) out.push([m.index + m[1].length, JSON_RE.lastIndex, 'punct']);
+      else if (m[3]) out.push([m.index, JSON_RE.lastIndex, 'number']);
+      else if (m[4]) out.push([m.index, JSON_RE.lastIndex, 'literal']);
+      else if (m[5]) out.push([m.index, JSON_RE.lastIndex, 'punct']);
+    }
+    return out;
   }
+
+  function sniff(text, toolName) {
+    if (/^(Bash|bash|shell)$/.test(toolName || '')) return 'bash';
+    var t = (text || '').trim();
+    if ((t[0] === '{' || t[0] === '[') && /[:,]/.test(t)) return 'json';
+    return 'bash';
+  }
+
+  /* ---------- highlight ---------- */
+
+  // highlight(text, {lang, tool, danger, pretty}) -> {html, lang, text}
+  function highlight(text, opts) {
+    opts = opts || {};
+    var src = String(text == null ? '' : text);
+    var lang = opts.lang || sniff(src, opts.tool);
+    if (lang === 'json' && opts.pretty !== false) {
+      try { src = JSON.stringify(JSON.parse(src), null, 2); } catch (_) { /* leave as written */ }
+    }
+    var toks = lang === 'json' ? tokenizeJson(src) : tokenizeBash(src);
+    var cuts = [];
+    var pats = opts.danger === false ? [] : (opts.danger || DANGER);
+    for (var p = 0; p < pats.length; p++) {
+      var re = pats[p], m;
+      re.lastIndex = 0;
+      while ((m = re.exec(src))) { cuts.push([m.index, m.index + m[0].length]); if (!m[0].length) re.lastIndex++; }
+    }
+    var html = '', at = 0;
+    function paint(a, b, cls) {
+      if (b <= a) return;
+      var hit = null;
+      for (var c = 0; c < cuts.length; c++) if (cuts[c][0] < b && cuts[c][1] > a) { hit = cuts[c]; break; }
+      if (!hit) { html += '<span class="k-syn-' + cls + '">' + esc(src.slice(a, b)) + '</span>'; return; }
+      paint(a, Math.max(a, hit[0]), cls);
+      var s2 = Math.max(a, hit[0]), e2 = Math.min(b, hit[1]);
+      // A short match (sudo, .env, --force) turns red. A whole flagged clause
+      // keeps its syntax colours and takes a red underline instead — a pipeline
+      // painted entirely red is less readable, not more alarming.
+      if (hit[1] - hit[0] <= 24) html += '<mark class="k-syn-danger">' + esc(src.slice(s2, e2)) + '</mark>';
+      else html += '<mark class="k-syn-danger k-syn-clause"><span class="k-syn-' + cls + '">' + esc(src.slice(s2, e2)) + '</span></mark>';
+      paint(e2, b, cls);
+    }
+    for (var i = 0; i < toks.length; i++) {
+      var t = toks[i];
+      if (t[0] > at) paint(at, t[0], 'plain');
+      paint(t[0], t[1], t[2]);
+      at = t[1];
+    }
+    if (at < src.length) paint(at, src.length, 'plain');
+    return { html: html, lang: lang, text: src };
+  }
+
+  /* ---------- record helpers ---------- */
+
+  var VERDICTS = ['allow', 'ask', 'deny', 'defer', 'none'];
+
+  // One line that says what the call actually does, for the row.
+  function summarize(record) {
+    var t = (record && record.tool) || {}, s = t.input || '';
+    try {
+      var j = JSON.parse(s);
+      s = j.command || j.file_path || j.pattern || j.url || j.prompt || j.description || s;
+      if (typeof s !== 'string') s = JSON.stringify(s);
+    } catch (_) { /* not JSON: the raw input is the summary */ }
+    return String(s).replace(/\s+/g, ' ').trim();
+  }
+
+  function verdictOf(record) {
+    if (record && record.kind === 'signoff') return record.decision === 'approve' ? 'allow' : 'deny';
+    return ((record && record.final) || {}).verdict || 'none';
+  }
+
+  function isSignoff(record) { return !!record && record.kind === 'signoff'; }
+
+  // A shell tool's input arrives as a JSON envelope around the command. Show
+  // the command as shell, and the rest of the envelope as a trailing note —
+  // running the bash tokenizer over the raw JSON reads as neither language.
+  function payloadOf(input, lang) {
+    var text = String(input == null ? '' : input), extras = [];
+    if (lang === 'json') return { text: text, lang: 'json', extras: extras };
+    try {
+      var j = JSON.parse(text);
+      if (j && typeof j === 'object' && !Array.isArray(j) && typeof j.command === 'string') {
+        Object.keys(j).forEach(function (k) {
+          if (k === 'command') return;
+          extras.push(k + ' ' + (typeof j[k] === 'string' ? j[k] : JSON.stringify(j[k])));
+        });
+        return { text: j.command, lang: 'bash', extras: extras };
+      }
+    } catch (_) { /* not an envelope: highlight what was given */ }
+    return { text: text, lang: lang || null, extras: extras };
+  }
+
+  /* ---------- components ---------- */
+
+  function VerdictBadge(props) {
+    props = props || {};
+    var v = VERDICTS.indexOf(props.verdict) < 0 ? 'none' : props.verdict;
+    var n = el('span', 'k-badge k-badge-' + v, props.label || v);
+    n.setAttribute('data-verdict', v);
+    if (props.title) n.title = props.title;
+    if (props.source) {
+      var wrap = el('span', 'k-badge-pair');
+      wrap.appendChild(n);
+      wrap.appendChild(el('span', 'k-meta', props.source));
+      return wrap;
+    }
+    return n;
+  }
+
+  function ChainStatus(props) {
+    props = props || {};
+    var state = props.state || 'unknown';
+    var text = props.text || (state === 'ok' ? 'chain ok · ' + (props.records || 0) + ' records'
+      : state === 'broken' ? 'chain BROKEN at line ' + props.line + (props.error ? ': ' + props.error : '')
+      : 'chain checking…');
+    var n = el('span', 'k-chain k-chain-' + state);
+    n.appendChild(el('span', 'k-chain-dot'));
+    n.appendChild(el('span', null, text));
+    n.setAttribute('role', 'status');
+    return n;
+  }
+
+  // The tool call itself: header line, highlighted body, collapse past maxLines.
+  function ToolCall(props) {
+    props = props || {};
+    var pay = payloadOf(props.input, props.lang);
+    var res = highlight(pay.text, { lang: pay.lang, tool: props.tool, danger: props.danger });
+    var root_ = el('div', 'k-toolcall');
+    var head = el('div', 'k-toolcall-head');
+    head.appendChild(el('span', 'k-toolcall-tool', props.tool || 'tool'));
+    if (res.lang === 'json') head.appendChild(el('span', 'k-toolcall-lang', 'json'));
+    if (props.verdict) head.appendChild(VerdictBadge({ verdict: props.verdict }));
+    if (props.actions !== false) {
+      var copy = el('button', 'k-btn k-btn-quiet', 'copy');
+      copy.type = 'button';
+      copy.onclick = function () {
+        var done = function () { copy.textContent = 'copied'; setTimeout(function () { copy.textContent = 'copy'; }, 1200); };
+        if (navigator.clipboard) navigator.clipboard.writeText(res.text).then(done, function () {}); else done();
+      };
+      head.appendChild(copy);
+    }
+    root_.appendChild(head);
+    var pre = el('pre', 'k-code');
+    var code = el('code');
+    code.innerHTML = res.html;
+    pre.appendChild(code);
+    root_.appendChild(pre);
+    if (pay.extras.length) root_.appendChild(el('div', 'k-meta k-toolcall-extras', pay.extras.join(' · ')));
+    var lines = res.text.split('\n').length, max = props.maxLines == null ? 12 : props.maxLines;
+    if (lines > max) {
+      pre.classList.add('k-code-clamped');
+      pre.style.setProperty('--k-clamp', max);
+      var more = el('button', 'k-btn k-btn-quiet k-toolcall-more', 'show all ' + lines + ' lines');
+      more.type = 'button';
+      more.onclick = function () {
+        var open = pre.classList.toggle('k-code-clamped');
+        more.textContent = open ? 'show all ' + lines + ' lines' : 'collapse';
+      };
+      root_.appendChild(more);
+    }
+    return root_;
+  }
+
+  // A row in the trail. A grid, not a table cell run: the summary column is the
+  // only elastic one, so nothing pushes the verdict off screen.
+  function RecordRow(props) {
+    props = props || {};
+    var r = props.record || {}, a = r.agent || {}, t = r.tool || {}, f = r.falco || {}, l = r.llm || {}, fin = r.final || {};
+    var v = verdictOf(r);
+    var row = el('div', 'k-row k-row-' + v + (isSignoff(r) ? ' k-row-signoff' : '') + (props.selected ? ' is-selected' : ''));
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-expanded', props.selected ? 'true' : 'false');
+    row.appendChild(el('span', 'k-lane'));
+    var ts = r.ts_ms ? new Date(r.ts_ms) : null;
+    var time = el('span', 'k-cell k-meta k-time', ts ? ts.toLocaleTimeString([], { hour12: false }) : '');
+    if (ts) time.title = ts.toLocaleString([], { hour12: false });
+    row.appendChild(time);
+    row.appendChild(el('span', 'k-cell k-meta k-seq', r.seq == null ? '' : '#' + r.seq));
+    if (isSignoff(r)) {
+      // A sign-off outcome: who decided what about which request.
+      var key = (r.key || {}).label || '';
+      row.appendChild(el('span', 'k-cell k-meta k-session', key ? 'key ' + key : 'operator'));
+      row.appendChild(el('span', 'k-cell k-tool', 'sign-off'));
+      var what = el('span', 'k-cell k-summary', r.decision + ' #' + r.request_seq +
+        (r.held_ms != null ? ' after ' + Math.round(r.held_ms / 1000) + 's' : '') +
+        (r.reason && r.decision !== 'approve' ? ' · ' + r.reason : ''));
+      what.title = r.reason || '';
+      row.appendChild(what);
+      var sig = el('span', 'k-cell k-signals');
+      sig.appendChild(el('span', 'k-badge k-badge-signoff', (r.key || {}).user_verified ? 'touch+pin' : ((r.key || {}).user_present ? 'touch' : 'no key')));
+      row.appendChild(sig);
+      row.appendChild(VerdictBadge({ verdict: v, source: r.decision, title: r.reason }));
+      var fireS = function () { if (props.onSelect) props.onSelect(r.seq, r); };
+      row.onclick = fireS;
+      row.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fireS(); } };
+      return row;
+    }
+    var who = el('span', 'k-cell k-meta k-session', (a.session_id || '').slice(0, 8) + (a.agent_type ? '/' + a.agent_type : ''));
+    who.title = a.session_id || '';
+    row.appendChild(who);
+    row.appendChild(el('span', 'k-cell k-tool', t.name || ''));
+    var sum = el('span', 'k-cell k-summary');
+    var hl = highlight(summarize(r), { tool: t.name, danger: props.danger });
+    sum.innerHTML = hl.html;
+    sum.title = summarize(r);
+    row.appendChild(sum);
+    var signals = el('span', 'k-cell k-signals');
+    signals.appendChild(VerdictBadge({
+      verdict: f.verdict || 'none',
+      label: 'falco ' + (f.verdict || 'none'),
+      title: (f.rules || []).map(function (x) { return x.rule; }).join('\n')
+    }));
+    var st = l.status || 'disabled';
+    if (st === 'ok') signals.appendChild(VerdictBadge({ verdict: l.verdict, label: 'llm ' + l.verdict, title: l.reason }));
+    else signals.appendChild(el('span', 'k-meta' + (st.indexOf('error') === 0 ? ' k-llm-error' : ''), 'llm ' + st));
+    row.appendChild(signals);
+    var finalBadge = VerdictBadge({ verdict: v, source: fin.source, title: fin.reason });
+    if ((r.signoff || {}).status === 'pending') {
+      finalBadge = el('span', 'k-badge-pair');
+      finalBadge.appendChild(VerdictBadge({ verdict: v, title: fin.reason }));
+      finalBadge.appendChild(el('span', 'k-meta', 'held for sign-off'));
+    }
+    row.appendChild(finalBadge);
+    function fire() { if (props.onSelect) props.onSelect(r.seq, r); }
+    row.onclick = fire;
+    row.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fire(); } };
+    return row;
+  }
+
+  // The column headings for a run of RecordRows. Same grid, so the labels
+  // cannot drift out of step with the cells.
+  function RecordRowHead() {
+    var row = el('div', 'k-row k-row-head');
+    row.appendChild(el('span', 'k-lane'));
+    var cols = [['time', 'k-time'], ['#', 'k-seq'], ['session', 'k-session'], ['tool', 'k-tool'],
+      ['call', 'k-summary'], ['signals', 'k-signals'], ['final', 'k-final']];
+    cols.forEach(function (c) { row.appendChild(el('span', 'k-cell ' + c[1], c[0])); });
+    return row;
+  }
+
+  function FilterBar(props) {
+    props = props || {};
+    var state = Object.assign({ q: '', final: '', source: '', llm: '', session: '', tool: '' }, props.value || {});
+    var bar = el('div', 'k-filters');
+    var search = el('input', 'k-input k-input-search');
+    search.type = 'search';
+    search.placeholder = props.placeholder || 'search command, rule, reason, session…';
+    search.value = state.q;
+    search.setAttribute('aria-label', 'Search the audit trail');
+    bar.appendChild(search);
+    var defs = [
+      ['final', 'final', VERDICTS.slice(0, 4)],
+      ['source', 'source', ['falco', 'llm', 'floor', 'monitor', 'passthrough', 'reaper', 'broker', 'signoff']],
+      ['llm', 'llm', ['ok', 'error', 'skipped', 'disabled']],
+      ['session', 'session', props.sessions || []],
+      ['tool', 'tool', props.tools || []]
+    ];
+    var controls = {};
+    defs.forEach(function (d) {
+      var label = el('label', 'k-field');
+      label.appendChild(el('span', 'k-field-label', d[1]));
+      var sel = el('select', 'k-select');
+      sel.appendChild(new Option('any', ''));
+      d[2].forEach(function (v) { sel.appendChild(new Option(v.length > 14 ? v.slice(0, 14) + '…' : v, v)); });
+      sel.value = state[d[0]] || '';
+      label.appendChild(sel);
+      bar.appendChild(label);
+      controls[d[0]] = sel;
+    });
+    var clear = el('button', 'k-btn k-btn-quiet', 'clear');
+    clear.type = 'button';
+    bar.appendChild(clear);
+    function emit() {
+      state.q = search.value;
+      Object.keys(controls).forEach(function (k) { state[k] = controls[k].value; });
+      var active = Object.keys(state).filter(function (k) { return state[k]; }).length;
+      clear.hidden = !active;
+      if (props.onChange) props.onChange(Object.assign({}, state));
+    }
+    search.addEventListener('input', emit);
+    Object.keys(controls).forEach(function (k) { controls[k].addEventListener('change', emit); });
+    clear.onclick = function () {
+      search.value = '';
+      Object.keys(controls).forEach(function (k) { controls[k].value = ''; });
+      emit();
+    };
+    clear.hidden = true;
+    return bar;
+  }
+
+  function kv(dl, term, node) {
+    dl.appendChild(el('dt', 'k-meta', term));
+    var dd = el('dd', 'k-dd');
+    if (typeof node === 'string') dd.textContent = node; else if (node) dd.appendChild(node);
+    dl.appendChild(dd);
+    return dd;
+  }
+
+  // Detail for a `kind: signoff` record: decision, key, proof, chain links.
+  function SignoffDetail(props) {
+    props = props || {};
+    var r = props.record || {}, k = r.key || {}, p = r.proof || {};
+    var panel = el('aside', 'k-detail');
+    panel.setAttribute('aria-label', 'Sign-off record ' + (r.seq || ''));
+    var head = el('div', 'k-detail-head');
+    head.appendChild(el('h2', 'k-title', 'sign-off #' + (r.seq == null ? '' : r.seq)));
+    head.appendChild(el('span', 'k-meta', (r.ts_ms ? new Date(r.ts_ms).toLocaleString([], { hour12: false }) : '') + (r.held_ms != null ? ' · held ' + Math.round(r.held_ms / 1000) + ' s' : '')));
+    var close = el('button', 'k-btn k-btn-quiet k-detail-close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close record detail');
+    close.onclick = function () { if (props.onClose) props.onClose(); };
+    head.appendChild(close);
+    panel.appendChild(head);
+    var verdict = el('div', 'k-detail-verdict');
+    verdict.appendChild(VerdictBadge({ verdict: verdictOf(r), source: r.decision }));
+    if (r.reason) verdict.appendChild(el('p', 'k-reason', r.reason));
+    panel.appendChild(verdict);
+    var dl = el('dl', 'k-kv');
+    var req = el('button', 'k-btn k-btn-quiet', 'request #' + r.request_seq);
+    req.type = 'button';
+    req.onclick = function () { if (props.onJump) props.onJump(r.request_seq); };
+    kv(dl, 'for', req);
+    if (k.label || k.credential_id) {
+      kv(dl, 'key', [k.label, k.user_present ? 'touched' : null, k.user_verified ? 'verified (PIN/bio)' : null,
+        k.sign_count != null ? 'counter ' + k.sign_count : null].filter(Boolean).join(' · '));
+      kv(dl, 'credential', el('code', 'k-hash', k.credential_id || ''));
+    }
+    if (r.rp_id) kv(dl, 'rp_id', r.rp_id);
+    if (p.signature) {
+      var proof = el('div', 'k-stack');
+      proof.appendChild(el('code', 'k-hash', 'auth_data ' + (p.auth_data || '')));
+      proof.appendChild(el('code', 'k-hash', 'signature ' + p.signature));
+      kv(dl, 'proof', proof);
+    }
+    var chain = el('div', 'k-stack');
+    chain.appendChild(el('code', 'k-hash', 'hash ' + (r.hash || '')));
+    chain.appendChild(el('code', 'k-hash', 'prev ' + (r.prev_hash || '')));
+    chain.appendChild(el('code', 'k-hash', 'request ' + (r.request_hash || '')));
+    kv(dl, 'chain', chain);
+    panel.appendChild(dl);
+    return panel;
+  }
+
+  // Calls the broker is holding for a hardware-key sign-off right now.
+  function SignoffBanner(props) {
+    props = props || {};
+    var held = props.held || [];
+    if (!held.length) return null;
+    var bar = el('div', 'k-signoff');
+    bar.setAttribute('role', 'status');
+    bar.appendChild(el('span', null, held.length + ' call' + (held.length > 1 ? 's' : '') + ' waiting for hardware-key sign-off'));
+    held.forEach(function (h) {
+      var item = el('span', 'k-signoff-item');
+      item.appendChild(el('span', 'k-meta', '#' + h.request_seq));
+      item.appendChild(el('span', 'k-tool', h.tool || ''));
+      var sum = el('span', 'k-summary');
+      sum.textContent = summarize({ tool: { input: h.input } });
+      sum.title = h.reason || '';
+      item.appendChild(sum);
+      item.appendChild(el('span', 'k-meta', (h.expires_in_secs != null ? h.expires_in_secs + 's left' : '')));
+      item.appendChild(el('code', 'k-signoff-cmd', 'premptictl signoff approve ' + h.request_seq));
+      bar.appendChild(item);
+    });
+    return bar;
+  }
+
+  function RecordDetail(props) {
+    props = props || {};
+    if (isSignoff(props.record)) return SignoffDetail(props);
+    var r = props.record || {}, a = r.agent || {}, t = r.tool || {}, l = r.llm || {}, f = r.falco || {}, fin = r.final || {};
+    var panel = el('aside', 'k-detail');
+    panel.setAttribute('aria-label', 'Record ' + (r.seq || ''));
+    var head = el('div', 'k-detail-head');
+    head.appendChild(el('h2', 'k-title', 'record #' + (r.seq == null ? '' : r.seq)));
+    head.appendChild(el('span', 'k-meta', (r.ts_ms ? new Date(r.ts_ms).toLocaleString([], { hour12: false }) : '') + (r.latency_ms != null ? ' · ' + r.latency_ms + ' ms' : '')));
+    var close = el('button', 'k-btn k-btn-quiet k-detail-close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close record detail');
+    close.onclick = function () { if (props.onClose) props.onClose(); };
+    head.appendChild(close);
+    panel.appendChild(head);
+
+    var verdict = el('div', 'k-detail-verdict');
+    verdict.appendChild(VerdictBadge({ verdict: fin.verdict, source: 'via ' + (fin.source || '?') }));
+    if (fin.reason) verdict.appendChild(el('p', 'k-reason', fin.reason));
+    if ((r.signoff || {}).status === 'pending') {
+      var so = props.signoff;
+      verdict.appendChild(el('p', 'k-meta', so
+        ? 'hardware-key sign-off: ' + so.decision + (so.key && so.key.label ? ' by key ' + so.key.label : '') + ' (record #' + so.seq + ')'
+        : 'hardware-key sign-off: waiting for the operator'));
+    }
+    panel.appendChild(verdict);
+
+    panel.appendChild(ToolCall({ tool: t.name, input: t.input, maxLines: props.maxLines == null ? 24 : props.maxLines }));
+
+    var dl = el('dl', 'k-kv');
+    var falco = el('div', 'k-stack');
+    falco.appendChild(VerdictBadge({ verdict: f.verdict || 'none' }));
+    (f.rules || []).forEach(function (x) {
+      var rule = el('div', 'k-rule');
+      rule.appendChild(el('span', 'k-rule-name', (x.kind ? x.kind + ' · ' : '') + x.rule));
+      rule.appendChild(el('span', 'k-meta', x.message || ''));
+      falco.appendChild(rule);
+    });
+    kv(dl, 'falco', falco);
+
+    var llm = el('div', 'k-stack');
+    var line = el('div', 'k-stack-line');
+    if (l.verdict) line.appendChild(VerdictBadge({ verdict: l.verdict }));
+    line.appendChild(el('span', 'k-meta', [l.status, l.model, l.latency_ms != null ? l.latency_ms + ' ms' : null,
+      l.attempts ? l.attempts + ' attempt' + (l.attempts > 1 ? 's' : '') : null].filter(Boolean).join(' · ')));
+    llm.appendChild(line);
+    if (l.reason) llm.appendChild(el('p', 'k-reason', l.reason));
+    if (l.roe_clause) llm.appendChild(el('p', 'k-meta', 'RoE: ' + l.roe_clause));
+    kv(dl, 'llm monitor', llm);
+
+    kv(dl, 'agent', [a.name, a.pid != null ? 'pid ' + a.pid : null, a.permission_mode ? 'mode ' + a.permission_mode : null,
+      a.agent_type ? 'subagent ' + a.agent_type : null].filter(Boolean).join(' · '));
+    kv(dl, 'session', a.session_id || '');
+    kv(dl, 'cwd', r.cwd || '');
+    var chain = el('div', 'k-stack');
+    chain.appendChild(el('code', 'k-hash', 'hash ' + (r.hash || '')));
+    chain.appendChild(el('code', 'k-hash', 'prev ' + (r.prev_hash || '')));
+    if (t.input_sha256) chain.appendChild(el('code', 'k-hash', 'input ' + t.input_sha256));
+    kv(dl, 'chain', chain);
+    panel.appendChild(dl);
+    return panel;
+  }
+
+  function StatBar(props) {
+    props = props || {};
+    var s = props.stats || {};
+    var bar = el('header', 'k-statbar');
+    bar.appendChild(el('h1', 'k-title', props.title || 'Kebnetrails audit trail'));
+    var counts = el('div', 'k-counts');
+    ['allow', 'ask', 'deny', 'defer'].forEach(function (v) {
+      var g = el('span', 'k-count k-count-' + v);
+      g.appendChild(el('b', null, String(s[v] || 0)));
+      g.appendChild(el('span', 'k-meta', v));
+      counts.appendChild(g);
+    });
+    var total = el('span', 'k-count');
+    total.appendChild(el('b', null, String(s.total || 0)));
+    total.appendChild(el('span', 'k-meta', 'records'));
+    counts.insertBefore(total, counts.firstChild);
+    bar.appendChild(counts);
+    var tools = el('div', 'k-tools');
+    if (props.chain) tools.appendChild(ChainStatus(props.chain));
+    (props.actions || []).forEach(function (act) {
+      var b = el('button', 'k-btn' + (act.active ? ' is-on' : ''), act.label);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', act.active ? 'true' : 'false');
+      b.onclick = function () { if (act.onClick) act.onClick(b); };
+      tools.appendChild(b);
+    });
+    bar.appendChild(tools);
+    return bar;
+  }
+
+  root.Kebnetrails = {
+    esc: esc,
+    DANGER: DANGER,
+    highlight: highlight,
+    summarize: summarize,
+    verdictOf: verdictOf,
+    VerdictBadge: VerdictBadge,
+    ChainStatus: ChainStatus,
+    SignoffBanner: SignoffBanner,
+    SignoffDetail: SignoffDetail,
+    isSignoff: isSignoff,
+    ToolCall: ToolCall,
+    RecordRow: RecordRow,
+    RecordRowHead: RecordRowHead,
+    FilterBar: FilterBar,
+    RecordDetail: RecordDetail,
+    StatBar: StatBar
+  };
+})(window);
+
+</script>
+<script>
+/* Kebnetrails audit UI — page logic. Components come from window.Kebnetrails
+   (the design system bundle inlined above); this file only fetches, filters
+   and mounts. */
+(function () {
+  'use strict';
+  var K = window.Kebnetrails;
+
+  var records = [];
+  var byId = new Map();
+  var lastSeq = 0;
+  var selected = null;
+  var follow = true;
+  var filters = { q: '', final: '', source: '', llm: '', session: '', tool: '' };
+  var chain = { state: 'unknown' };
+  var sessions = new Set();
+  var tools = new Set();
+  var held = [];
+  // request seq -> sign-off record, so a held request can show its outcome.
+  var signoffFor = new Map();
+
+  var $ = function (id) { return document.getElementById(id); };
+  var chrome = $('chrome');
+  var statSlot = $('stat');
+  var signoffSlot = $('signoff');
+  var filterSlot = $('filters');
+  var main = $('main');
+  var rowsEl = $('rows');
+  var headEl = $('head');
+  var emptyEl = $('empty');
+  var detailSlot = $('detail');
+
+  /* ---- chrome ---- */
+
+  function drawStat() {
+    var s = { total: records.length, allow: 0, ask: 0, deny: 0, defer: 0 };
+    for (var i = 0; i < records.length; i++) {
+      var v = K.verdictOf(records[i]);
+      if (v in s) s[v]++;
+    }
+    statSlot.replaceChildren(K.StatBar({
+      title: 'Kebnetrails audit trail',
+      stats: s,
+      chain: chain,
+      actions: [
+        { label: 'follow', active: follow, onClick: function (b) {
+            follow = !follow;
+            b.classList.toggle('is-on', follow);
+            b.setAttribute('aria-pressed', follow ? 'true' : 'false');
+            if (follow) window.scrollTo(0, document.body.scrollHeight);
+          } },
+        { label: 'verify', onClick: verify }
+      ]
+    }));
+    measureChrome();
+  }
+
+  function drawSignoff() {
+    var banner = K.SignoffBanner({ held: held });
+    if (banner) signoffSlot.replaceChildren(banner); else signoffSlot.replaceChildren();
+    measureChrome();
+  }
+
+  function measureChrome() {
+    document.documentElement.style.setProperty('--chrome-h', chrome.offsetHeight + 'px');
+  }
+
+  var filterBar = K.FilterBar({
+    value: filters,
+    sessions: [],
+    tools: [],
+    onChange: function (v) { filters = v; drawRows(); }
+  });
+  filterSlot.appendChild(filterBar);
+
+  // Add newly seen sessions and tools without rebuilding the bar, so typing in
+  // the search field survives a poll.
+  function syncOptions() {
+    var selects = filterBar.querySelectorAll('.k-field select');
+    [[selects[3], sessions, true], [selects[4], tools, false]].forEach(function (pair) {
+      var sel = pair[0], values = pair[1], truncate = pair[2];
+      if (!sel) return;
+      var have = new Set(Array.prototype.map.call(sel.options, function (o) { return o.value; }));
+      Array.from(values).sort().forEach(function (v) {
+        if (have.has(v)) return;
+        sel.appendChild(new Option(truncate && v.length > 14 ? v.slice(0, 14) + '…' : v, v));
+      });
+    });
+  }
+
+  /* ---- filtering ---- */
+
   function matches(r) {
-    const q = $('q').value.trim().toLowerCase();
-    const ff = $('f-final').value, fs = $('f-source').value, fl = $('f-llm').value, fse = $('f-session').value, ft = $('f-tool').value;
-    if (ff && (r.final || {}).verdict !== ff) return false;
-    if (fs && (r.final || {}).source !== fs) return false;
-    if (fl && !String((r.llm || {}).status || '').startsWith(fl)) return false;
-    if (fse && (r.agent || {}).session_id !== fse) return false;
-    if (ft && (r.tool || {}).name !== ft) return false;
-    if (q) {
-      const hay = [r.tool?.input, r.tool?.name, r.llm?.reason, r.llm?.roe_clause, r.final?.reason, r.agent?.session_id, r.agent?.agent_type, r.cwd,
-        ...(r.falco?.rules || []).map(x => x.rule + ' ' + x.message)].join(' ').toLowerCase();
-      if (!hay.includes(q)) return false;
+    var f = filters;
+    if (K.isSignoff(r)) {
+      if (f.tool || f.llm) return false;
+      if (f.final && K.verdictOf(r) !== f.final) return false;
+      if (f.source && f.source !== 'signoff') return false;
+      if (f.session) {
+        var req = byId.get(r.request_seq);
+        if (!req || (req.agent || {}).session_id !== f.session) return false;
+      }
+      if (f.q) {
+        var hs = [r.reason, (r.key || {}).label, r.decision, 'signoff', '#' + r.request_seq].join(' ').toLowerCase();
+        if (hs.indexOf(f.q.toLowerCase().trim()) < 0) return false;
+      }
+      return true;
+    }
+    if (f.final && K.verdictOf(r) !== f.final) return false;
+    if (f.source && (r.final || {}).source !== f.source) return false;
+    if (f.llm && String((r.llm || {}).status || '').indexOf(f.llm) !== 0) return false;
+    if (f.session && (r.agent || {}).session_id !== f.session) return false;
+    if (f.tool && (r.tool || {}).name !== f.tool) return false;
+    if (f.q) {
+      var hay = [
+        (r.tool || {}).input, (r.tool || {}).name, (r.llm || {}).reason, (r.llm || {}).roe_clause,
+        (r.final || {}).reason, (r.agent || {}).session_id, (r.agent || {}).agent_type, r.cwd
+      ].concat(((r.falco || {}).rules || []).map(function (x) { return x.rule + ' ' + x.message; }))
+        .join(' ').toLowerCase();
+      if (hay.indexOf(f.q.toLowerCase().trim()) < 0) return false;
     }
     return true;
   }
-  function render() {
-    const tbody = $('rows'); const frag = document.createDocumentFragment(); let shown = 0;
-    for (const r of records) {
-      if (!matches(r)) continue; shown++;
-      const tr = document.createElement('tr'); tr.className = 'row' + (selected === r.seq ? ' sel' : ''); tr.dataset.seq = r.seq;
-      const a = r.agent || {}; const who = (a.session_id || '').slice(0, 8) + (a.agent_type ? '/' + a.agent_type : '');
-      const fin = r.final || {};
-      tr.innerHTML = `<td title="${esc(fmtDate(r.ts_ms))}">${fmtTs(r.ts_ms)}</td><td>${r.seq}</td><td title="${esc(a.session_id)}">${esc(who)}</td>` +
-        `<td>${esc(r.tool?.name)}</td><td class="wrap" title="${esc(inputSummary(r))}">${esc(inputSummary(r).slice(0, 160))}</td>` +
-        `<td>${falcoCell(r)}</td><td>${llmCell(r)}</td><td><span class="badge b-${esc(fin.verdict)}">${esc(fin.verdict)}</span> <span class="src">${esc(fin.source)}</span></td>`;
-      tr.onclick = () => select(r.seq);
-      frag.appendChild(tr);
+
+  /* ---- trail ---- */
+
+  function drawRows() {
+    var frag = document.createDocumentFragment();
+    var shown = 0;
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      if (!matches(r)) continue;
+      shown++;
+      frag.appendChild(K.RecordRow({
+        record: r,
+        selected: r.seq === selected,
+        onSelect: select
+      }));
     }
-    tbody.replaceChildren(frag);
-    $('empty').hidden = shown > 0;
+    rowsEl.replaceChildren(frag);
+    emptyEl.hidden = shown > 0;
+    headEl.hidden = shown === 0;
     if (follow && shown) window.scrollTo(0, document.body.scrollHeight);
   }
-  function stats() {
-    const c = {allow:0, ask:0, deny:0, defer:0, ok:0, err:0};
-    for (const r of records) { const v = r.final?.verdict; if (v in c) c[v]++; const s = r.llm?.status || ''; if (s === 'ok') c.ok++; else if (s.startsWith('error')) c.err++; }
-    $('n-total').textContent = records.length; $('n-allow').textContent = c.allow; $('n-ask').textContent = c.ask; $('n-deny').textContent = c.deny; $('n-defer').textContent = c.defer; $('n-llm-ok').textContent = c.ok; $('n-llm-err').textContent = c.err;
-  }
-  function refreshOptions(id, values) {
-    const sel = $(id); const cur = sel.value; const opts = ['<option value="">any</option>', ...[...values].sort().map(v => `<option value="${esc(v)}">${esc(v.length > 12 && id === 'f-session' ? v.slice(0, 12) + '…' : v)}</option>`)];
-    sel.innerHTML = opts.join(''); sel.value = cur;
-  }
+
   function select(seq) {
-    selected = seq; const r = byId.get(seq); const d = $('detail'); if (!r) return;
-    const a = r.agent || {}, t = r.tool || {}, l = r.llm || {}, f = r.falco || {}, fin = r.final || {};
-    let input = t.input || ''; try { input = JSON.stringify(JSON.parse(input), null, 2); } catch (_) {}
-    d.innerHTML = `<button class="close" id="close">×</button><h2>record #${r.seq} · ${esc(fmtDate(r.ts_ms))} · ${r.latency_ms} ms</h2>
-      <dl class="kv">
-        <dt>final</dt><dd><span class="badge b-${esc(fin.verdict)}">${esc(fin.verdict)}</span> via ${esc(fin.source)}${fin.reason ? '\n' + esc(fin.reason) : ''}</dd>
-        <dt>LLM monitor</dt><dd>${esc(l.status)}${l.verdict ? ' → ' + esc(l.verdict) : ''}${l.model ? ' · ' + esc(l.model) : ''}${l.latency_ms ? ' · ' + l.latency_ms + ' ms · ' + l.attempts + ' attempt(s)' : ''}${l.reason ? '\n' + esc(l.reason) : ''}${l.roe_clause ? '\nRoE: ' + esc(l.roe_clause) : ''}</dd>
-        <dt>Falco</dt><dd>${esc(f.verdict)}${(f.rules || []).map(x => '\n• ' + esc(x.kind) + ' ' + esc(x.rule) + '\n  ' + esc(x.message)).join('')}</dd>
-        <dt>agent</dt><dd>${esc(a.name)} pid ${a.pid} · session ${esc(a.session_id)}${a.agent_id ? ' · subagent ' + esc(a.agent_type) + ' ' + esc(a.agent_id) : ''} · mode ${esc(r.mode)} · permission ${esc(a.permission_mode)}\ncwd ${esc(r.cwd)}\ntranscript ${esc(a.transcript_path)}</dd>
-        <dt>tool ${esc(t.name)} ${esc(t.use_id)}${t.input_truncated ? ' (input truncated in record)' : ''}</dt><dd><pre>${esc(input)}</pre>sha256 ${esc(t.input_sha256)}</dd>
-        <dt>chain</dt><dd>hash ${esc(r.hash)}\nprev ${esc(r.prev_hash)}${l.roe_sha256 ? '\nRoE ' + esc(l.roe_sha256) : ''}</dd>
-      </dl>`;
-    d.hidden = false; $('main').classList.add('open'); $('close').onclick = () => { d.hidden = true; $('main').classList.remove('open'); selected = null; render(); };
-    render();
+    if (seq === selected) return close();
+    selected = seq;
+    var r = byId.get(seq);
+    if (!r) return;
+    detailSlot.replaceChildren(K.RecordDetail({ record: r, onClose: close, signoff: signoffFor.get(seq), onJump: select }));
+    main.classList.add('is-open');
+    rowsEl.classList.add('k-rows-compact');
+    headEl.classList.add('k-rows-compact');
+    follow = false;
+    drawStat();
+    drawRows();
   }
-  async function poll() {
-    try {
-      const res = await fetch(`api/records?since=${lastSeq}`); if (!res.ok) throw new Error(res.status);
-      const batch = await res.json();
-      if (batch.length) {
-        for (const r of batch) { if (!byId.has(r.seq)) { records.push(r); byId.set(r.seq, r); } if (r.seq > lastSeq) lastSeq = r.seq; }
-        refreshOptions('f-session', new Set(records.map(r => r.agent?.session_id).filter(Boolean)));
-        refreshOptions('f-tool', new Set(records.map(r => r.tool?.name).filter(Boolean)));
-        stats(); render();
+
+  function close() {
+    selected = null;
+    detailSlot.replaceChildren();
+    main.classList.remove('is-open');
+    rowsEl.classList.remove('k-rows-compact');
+    headEl.classList.remove('k-rows-compact');
+    drawRows();
+  }
+
+  /* ---- server ---- */
+
+  function poll() {
+    fetch('api/records?since=' + lastSeq).then(function (res) {
+      if (!res.ok) throw new Error(res.status);
+      return res.json();
+    }).then(function (batch) {
+      if (!batch.length) return;
+      for (var i = 0; i < batch.length; i++) {
+        var r = batch[i];
+        if (!byId.has(r.seq)) { records.push(r); byId.set(r.seq, r); }
+        if (r.seq > lastSeq) lastSeq = r.seq;
+        if (r.agent && r.agent.session_id) sessions.add(r.agent.session_id);
+        if (r.tool && r.tool.name) tools.add(r.tool.name);
+        if (K.isSignoff(r)) signoffFor.set(r.request_seq, r);
       }
-    } catch (e) { $('chain').textContent = 'chain: server unreachable'; $('chain').className = 'chain bad'; }
+      syncOptions();
+      drawStat();
+      drawRows();
+    }).catch(function () {
+      chain = { state: 'unknown', text: 'chain: server unreachable' };
+      drawStat();
+    });
   }
-  async function verify() {
-    const el = $('chain'); el.textContent = 'chain: checking…'; el.className = 'chain unk';
-    try { const v = await (await fetch('api/verify')).json();
-      if (v.ok) { el.textContent = `chain: ok (${v.records} records)`; el.className = 'chain ok'; }
-      else { el.textContent = `chain: BROKEN at line ${v.line}: ${v.error}`; el.className = 'chain bad'; }
-    } catch (_) { el.textContent = 'chain: server unreachable'; el.className = 'chain bad'; }
+
+  function pollSignoff() {
+    fetch('api/signoff').then(function (res) { return res.json(); }).then(function (v) {
+      held = (v && v.held) || [];
+      drawSignoff();
+    }).catch(function () {
+      if (held.length) { held = []; drawSignoff(); }
+    });
   }
-  for (const id of ['q', 'f-final', 'f-source', 'f-llm', 'f-session', 'f-tool']) $(id).addEventListener('input', render);
-  $('follow').onclick = () => { follow = !follow; $('follow').classList.toggle('on', follow); };
-  $('verify').onclick = verify;
-  poll(); verify(); setInterval(poll, 2000); setInterval(verify, 30000);
+
+  function verify() {
+    chain = { state: 'unknown' };
+    drawStat();
+    fetch('api/verify').then(function (res) { return res.json(); }).then(function (v) {
+      chain = v.ok ? { state: 'ok', records: v.records }
+        : { state: 'broken', line: v.line, error: v.error };
+      drawStat();
+    }).catch(function () {
+      chain = { state: 'unknown', text: 'chain: server unreachable' };
+      drawStat();
+    });
+  }
+
+  headEl.replaceChildren(K.RecordRowHead());
+  headEl.hidden = true;
+  drawStat();
+  poll();
+  verify();
+  pollSignoff();
+  setInterval(poll, 2000);
+  setInterval(pollSignoff, 2000);
+  setInterval(verify, 30000);
+  window.addEventListener('resize', measureChrome);
 })();
+
 </script>
 </body>
 </html>

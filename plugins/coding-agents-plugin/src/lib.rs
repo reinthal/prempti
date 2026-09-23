@@ -15,6 +15,7 @@ mod event;
 mod extract;
 mod http_server;
 mod monitor;
+mod signoff;
 mod socket_server;
 mod source;
 mod verdict;
@@ -134,12 +135,28 @@ impl Plugin for CodingAgentPlugin {
             }
         }
 
+        if config.signoff.enabled {
+            let s = &config.signoff;
+            if !config.audit_enabled {
+                return Err(anyhow::anyhow!(
+                    "signoff.enabled requires audit_enabled: the operator's key signs the audit record hash"
+                ));
+            }
+            if s.ttl_secs == 0 {
+                return Err(anyhow::anyhow!("signoff.ttl_secs must be at least 1"));
+            }
+            if s.rp_id.trim().is_empty() {
+                return Err(anyhow::anyhow!("signoff.rp_id is empty"));
+            }
+        }
+
         log::info!(
-            "coding_agent plugin initialized (mode={}, default_action={}, socket_path={}, http_port={})",
+            "coding_agent plugin initialized (mode={}, default_action={}, socket_path={}, http_port={}, signoff={})",
             config.mode,
             config.default_action,
             config.socket_path,
             config.http_port,
+            config.signoff.enabled,
         );
 
         let (event_tx, event_rx): (Sender<EventData>, Receiver<EventData>) =
@@ -162,6 +179,29 @@ impl Plugin for CodingAgentPlugin {
             broker.set_audit_sink(Arc::new(sink));
         } else {
             log::warn!("audit trail disabled (audit_enabled: false)");
+        }
+
+        // Hardware-key sign-off. Key store problems are init failures: a
+        // service that would hold every `ask` forever with no key able to
+        // release it is worse than one that refuses to start.
+        if config.signoff.enabled {
+            let s = &config.signoff;
+            let keys = signoff::KeyStore::load(std::path::Path::new(&s.keys_path))
+                .map_err(|e| anyhow::anyhow!("signoff: {e}"))?;
+            if keys.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "signoff.enabled but no keys enrolled in {} (run `premptictl signoff enroll`)",
+                    s.keys_path
+                ));
+            }
+            broker.set_signoff(
+                signoff::SignoffPolicy {
+                    rp_id: s.rp_id.clone(),
+                    require_uv: s.require_uv,
+                    keys,
+                },
+                s.ttl_secs,
+            );
         }
 
         // LLM monitor (second verdict source). Started before the socket

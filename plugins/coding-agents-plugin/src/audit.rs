@@ -107,6 +107,8 @@ pub struct AuditDraft {
     /// The verdict written to the wire and which signal produced it:
     /// `falco` | `llm` | `floor` | `monitor` | `passthrough` | `reaper` | `broker`.
     pub final_verdict: Option<(Verdict, &'static str)>,
+    /// `none` | `pending` (held for hardware-key sign-off when sealed).
+    pub signoff_status: &'static str,
     pub started: Instant,
 }
 
@@ -121,6 +123,7 @@ impl Default for AuditDraft {
             falco: Vec::new(),
             llm: LlmOutcome::default(),
             final_verdict: None,
+            signoff_status: "none",
             started: Instant::now(),
         }
     }
@@ -202,10 +205,7 @@ impl AuditDraft {
     }
 
     fn to_value(&self, seq: u64, prev_hash: &str) -> serde_json::Value {
-        let ts_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let ts_ms = now_ms();
         let falco_verdict = if self.falco.iter().any(|h| h.kind == "deny") {
             "deny"
         } else if self.falco.iter().any(|h| h.kind == "ask") {
@@ -222,6 +222,7 @@ impl AuditDraft {
         };
         serde_json::json!({
             "v": RECORD_VERSION,
+            "kind": "request",
             "seq": seq,
             "ts_ms": ts_ms,
             "correlation_id": self.correlation_id,
@@ -267,10 +268,72 @@ impl AuditDraft {
                 "reason": final_reason,
                 "source": final_source,
             },
+            "signoff": {
+                "status": self.signoff_status,
+            },
             "latency_ms": self.started.elapsed().as_millis() as u64,
             "prev_hash": prev_hash,
         })
     }
+}
+
+/// Outcome of a hardware-key sign-off on a held request. Appended as its
+/// own `kind: "signoff"` record right after the decision, chained like any
+/// other record; `request_hash` ties it to the held request's record.
+#[derive(Clone, Debug, Default)]
+pub struct SignoffRecord {
+    pub correlation_id: u64,
+    pub request_seq: u64,
+    pub request_hash: String,
+    /// `approve` | `deny` | `expired`.
+    pub decision: &'static str,
+    pub reason: String,
+    pub rp_id: String,
+    pub key_label: String,
+    pub credential_id: String,
+    pub sign_count: u32,
+    pub user_present: bool,
+    pub user_verified: bool,
+    pub auth_data: String,
+    pub signature: String,
+    pub held_ms: u64,
+}
+
+impl SignoffRecord {
+    fn to_value(&self, seq: u64, prev_hash: &str) -> serde_json::Value {
+        serde_json::json!({
+            "v": RECORD_VERSION,
+            "kind": "signoff",
+            "seq": seq,
+            "ts_ms": now_ms(),
+            "correlation_id": self.correlation_id,
+            "request_seq": self.request_seq,
+            "request_hash": self.request_hash,
+            "decision": self.decision,
+            "reason": self.reason,
+            "rp_id": self.rp_id,
+            "key": {
+                "label": self.key_label,
+                "credential_id": self.credential_id,
+                "sign_count": self.sign_count,
+                "user_present": self.user_present,
+                "user_verified": self.user_verified,
+            },
+            "proof": {
+                "auth_data": self.auth_data,
+                "signature": self.signature,
+            },
+            "held_ms": self.held_ms,
+            "prev_hash": prev_hash,
+        })
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// `(label, reason)` for a verdict.
@@ -417,11 +480,24 @@ impl AuditSink {
         })
     }
 
-    /// Seal `draft` into the next record and append it.
-    pub fn append(&self, draft: &AuditDraft) {
+    /// Seal `draft` into the next record and append it. Returns the
+    /// record's `(seq, hash)`, or `None` if the write failed.
+    pub fn append(&self, draft: &AuditDraft) -> Option<(u64, String)> {
+        self.append_with(|seq, prev| draft.to_value(seq, prev))
+    }
+
+    /// Append a sign-off outcome record.
+    pub fn append_signoff(&self, rec: &SignoffRecord) -> Option<(u64, String)> {
+        self.append_with(|seq, prev| rec.to_value(seq, prev))
+    }
+
+    fn append_with(
+        &self,
+        build: impl FnOnce(u64, &str) -> serde_json::Value,
+    ) -> Option<(u64, String)> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let seq = inner.seq + 1;
-        let mut value = draft.to_value(seq, &inner.prev_hash);
+        let mut value = build(seq, &inner.prev_hash);
         let body = canonical_json(&value);
         let hash = chain_hash(&inner.prev_hash, &body);
         if let Some(obj) = value.as_object_mut() {
@@ -430,10 +506,11 @@ impl AuditSink {
         let line = canonical_json(&value);
         if let Err(e) = writeln!(inner.file, "{line}").and_then(|_| inner.file.flush()) {
             log::error!("audit: failed to append to {}: {e}", self.path);
-            return;
+            return None;
         }
         inner.seq = seq;
-        inner.prev_hash = hash;
+        inner.prev_hash = hash.clone();
+        Some((seq, hash))
     }
 
     #[allow(dead_code)]
@@ -544,6 +621,37 @@ mod tests {
             sink.append(&sample(3));
         }
         assert_eq!(verify_file(&path).unwrap(), 3);
+    }
+
+    #[test]
+    fn signoff_record_chains_after_request_record() {
+        let path = temp_path("signoff");
+        let sink = AuditSink::open(&path).unwrap();
+        let mut d = sample(5);
+        d.signoff_status = "pending";
+        let (req_seq, req_hash) = sink.append(&d).unwrap();
+        let rec = SignoffRecord {
+            correlation_id: 5,
+            request_seq: req_seq,
+            request_hash: req_hash.clone(),
+            decision: "approve",
+            key_label: "yubi".into(),
+            ..Default::default()
+        };
+        let (seq, _) = sink.append_signoff(&rec).unwrap();
+        assert_eq!(seq, req_seq + 1);
+        assert_eq!(verify_file(&path).unwrap(), 2);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["kind"], "request");
+        assert_eq!(lines[0]["signoff"]["status"], "pending");
+        assert_eq!(lines[1]["kind"], "signoff");
+        assert_eq!(lines[1]["request_hash"], req_hash);
+        assert_eq!(lines[1]["key"]["label"], "yubi");
+        assert_eq!(lines[1]["prev_hash"], req_hash);
     }
 
     #[test]

@@ -77,6 +77,10 @@ Exposes Prempti as a NixOS / home-manager service. Linux only (x86_64, aarch64).
 | `monitor.timeoutMs` / `onError` | `20000` / `ask` | Hook timeout is derived from `timeoutMs` |
 | `monitor.maxTranscriptBytes` / `maxInputBytes` / `workers` | `32768` / `8192` / `4` | |
 | `monitor.skipTools` | `[]` | e.g. `[ "Read" "Glob" "Grep" ]` |
+| `signoff.enable` | `false` | Hold every `ask` for a hardware-key (FIDO2) sign-off; requires `audit.enable` |
+| `signoff.ttlSecs` | `300` | Held calls are denied after this; hook timeout derived from it |
+| `signoff.rpId` / `requireUv` | `prempti.local` / `false` | Relying-party id; require PIN/biometric, not just touch |
+| `signoff.keysFile` | `null` | `config/signoff_keys.json` from `premptictl signoff enroll` (public keys only); required when enabled |
 | `supervisor.logRotateBytes` | `10485760` | |
 | `supervisor.logRotateKeep` | `3` | |
 | `supervisor.stopTimeoutSecs` | `20` | |
@@ -127,6 +131,33 @@ start, so it is visible in the Falco process environment for the same user.
 `premptictl monitor status` shows the effective settings; `premptictl roe
 set <file>` swaps the RoE and restarts the service; `premptictl audit
 tail -f` follows the trail.
+
+## Hardware-key sign-off (YubiKey / FIDO2)
+
+```nix
+services.prempti = {
+  enable = true;
+  signoff = {
+    enable = true;
+    ttlSecs = 300;
+    keysFile = ./signoff_keys.json;   # from `premptictl signoff enroll`
+  };
+};
+# hidraw access to the key for your user:
+services.udev.packages = [ pkgs.libfido2 ];
+```
+
+Enrolment needs a running service only for the config file: run
+`premptictl signoff enroll --label desk` once (touch the key), copy the
+resulting `~/.prempti/config/signoff_keys.json` next to your Nix config and
+point `keysFile` at it. From then on every `ask` verdict, whether from a
+Falco rule or the LLM monitor, parks the tool call: Claude Code waits, and
+`premptictl signoff list` / `signoff watch` show what is pending.
+`premptictl signoff approve <seq>` signs the call's audit record hash with
+the key and releases it as `allow`; `signoff deny <seq>` needs no key.
+Unanswered calls are denied after `ttlSecs`. Every decision is its own
+`kind: signoff` record in `audit.jsonl`, carrying the assertion so
+`premptictl audit verify` and the audit UI can show who released what.
 
 ## How it maps onto upstream's layout
 

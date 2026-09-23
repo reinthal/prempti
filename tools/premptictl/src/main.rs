@@ -8,6 +8,7 @@ mod daemon;
 mod hook;
 mod hook_codex;
 mod logs_pretty;
+mod signoff;
 
 #[cfg(target_os = "linux")]
 const SERVICE_NAME: &str = "prempti";
@@ -73,17 +74,23 @@ fn hook_timeout_for(monitor_timeout_ms: u64) -> u64 {
 }
 
 /// Scalar keys of the `monitor:` block of the plugin config, in file
-/// order. `None` when there is no such block. Line-oriented like `mode:`
-/// handling (no YAML parser in premptictl): the block is every subsequent
-/// line indented deeper than `monitor:` itself. Values lose surrounding
-/// quotes and trailing `# comments`.
+/// order. `None` when there is no such block. See `parse_block`.
 fn parse_monitor_block(yaml: &str) -> Option<Vec<(String, String)>> {
+    parse_block(yaml, "monitor:")
+}
+
+/// Scalar keys of the mapping block introduced by the line `key` (e.g.
+/// `monitor:` or `signoff:`), in file order. `None` when there is no such
+/// block. Line-oriented like `mode:` handling (no YAML parser in
+/// premptictl): the block is every subsequent line indented deeper than the
+/// key line itself. Values lose surrounding quotes and trailing `# comments`.
+pub(crate) fn parse_block(yaml: &str, key: &str) -> Option<Vec<(String, String)>> {
     let indent_of = |l: &str| l.len() - l.trim_start().len();
     let mut lines = yaml.lines();
     let block_indent = loop {
         let line = lines.next()?;
         let trimmed = line.trim();
-        if trimmed == "monitor:" {
+        if trimmed == key {
             break indent_of(line);
         }
     };
@@ -267,7 +274,7 @@ fn monitor_status(prefix: &PathBuf) {
         ),
         Err(_) => println!("  {:<21} {} (MISSING)", "roe", roe.display()),
     }
-    match monitor_hook_timeout_ms(prefix) {
+    match hook_timeout_ms(prefix) {
         Some(ms) => println!(
             "  {:<21} PREMPTI_TIMEOUT_MS={ms} on the Claude Code hook",
             "hook timeout"
@@ -286,7 +293,7 @@ fn monitor_status(prefix: &PathBuf) {
 /// After a healthy synthetic event, report what the LLM monitor did with it
 /// (from the newest audit record for the health-check session).
 fn print_health_monitor_outcome(prefix: &Path) {
-    if monitor_hook_timeout_ms(prefix).is_none() {
+    if !monitor_enabled(prefix) {
         return;
     }
     let path = audit::audit_path(prefix);
@@ -317,13 +324,39 @@ fn print_health_monitor_outcome(prefix: &Path) {
     println!("LLM monitor: no audit record found for the health check");
 }
 
+/// Interceptor wait to configure when hardware-key sign-off is on: the
+/// whole hold window plus slack for Falco, the LLM and the socket.
+fn signoff_hook_timeout_for(ttl_secs: u64) -> u64 {
+    ttl_secs.saturating_mul(1000).saturating_add(15_000)
+}
+
+/// True when the plugin config enables the LLM monitor.
+pub(crate) fn monitor_enabled(prefix: &Path) -> bool {
+    fs::read_to_string(plugin_config_path(&prefix.to_path_buf()))
+        .ok()
+        .and_then(|d| parse_monitor_settings(&d))
+        .is_some_and(|(enabled, _)| enabled)
+}
+
 /// `Some(interceptor timeout ms)` when the plugin config enables the LLM
-/// monitor; `None` when it is off or the config is unreadable.
-pub(crate) fn monitor_hook_timeout_ms(prefix: &Path) -> Option<u64> {
+/// monitor and/or hardware-key sign-off (the larger of the two waits);
+/// `None` when both are off or the config is unreadable.
+pub(crate) fn hook_timeout_ms(prefix: &Path) -> Option<u64> {
     let data = fs::read_to_string(plugin_config_path(&prefix.to_path_buf())).ok()?;
-    parse_monitor_settings(&data)
+    hook_timeout_from_config(&data)
+}
+
+fn hook_timeout_from_config(data: &str) -> Option<u64> {
+    let monitor = parse_monitor_settings(data)
         .filter(|(enabled, _)| *enabled)
-        .map(|(_, t)| hook_timeout_for(t))
+        .map(|(_, t)| hook_timeout_for(t));
+    let signoff = Some(signoff::parse_settings(data))
+        .filter(|s| s.enabled)
+        .map(|s| signoff_hook_timeout_for(s.ttl_secs));
+    match (monitor, signoff) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0).max(b.unwrap_or(0))),
+    }
 }
 
 #[cfg(test)]
@@ -352,6 +385,20 @@ mod monitor_settings_tests {
     #[test]
     fn hook_timeout_formula() {
         assert_eq!(hook_timeout_for(20_000), 45_000);
+        assert_eq!(signoff_hook_timeout_for(300), 315_000);
+    }
+
+    #[test]
+    fn hook_timeout_takes_the_larger_of_monitor_and_signoff() {
+        assert_eq!(hook_timeout_from_config("mode: guardrails\n"), None);
+        let monitor_only = "monitor:\n  enabled: true\n  timeout_ms: 20000\n";
+        assert_eq!(hook_timeout_from_config(monitor_only), Some(45_000));
+        let signoff_only = "signoff:\n  enabled: true\n  ttl_secs: 120\n";
+        assert_eq!(hook_timeout_from_config(signoff_only), Some(135_000));
+        let both = "monitor:\n  enabled: true\n  timeout_ms: 90000\nsignoff:\n  enabled: true\n  ttl_secs: 60\n";
+        assert_eq!(hook_timeout_from_config(both), Some(185_000));
+        let disabled = "monitor:\n  enabled: false\nsignoff:\n  enabled: false\n";
+        assert_eq!(hook_timeout_from_config(disabled), None);
     }
 
     #[test]
@@ -1542,7 +1589,7 @@ fn health(prefix: &PathBuf) {
         .env("PREMPTI_SOCKET", &socket)
         .env(
             "PREMPTI_TIMEOUT_MS",
-            monitor_hook_timeout_ms(prefix)
+            hook_timeout_ms(prefix)
                 .unwrap_or(HOOK_TIMEOUT_DEFAULT_MS)
                 .to_string(),
         )
@@ -2352,6 +2399,13 @@ fn print_usage() {
     eprintln!("  audit tail       Print recent audit records (-n N, -f, --json)");
     eprintln!("  audit serve      Live web UI for the audit trail on 127.0.0.1:2803 (--addr)");
     eprintln!();
+    eprintln!("  signoff status   Hardware-key sign-off configuration and enrolled keys");
+    eprintln!("  signoff enroll   Register the connected FIDO2 key (--label L, --pin)");
+    eprintln!("  signoff list     Tool calls waiting for a hardware-key sign-off");
+    eprintln!("  signoff approve SEQ   Release a held call with a key touch (--pin)");
+    eprintln!("  signoff deny SEQ      Deny a held call (--reason R)");
+    eprintln!("  signoff watch    Prompt for each held call as it arrives (--pin)");
+    eprintln!();
     eprintln!("  daemon [flags]   Run the supervisor (spawns Falco, owns logs and rotation,");
     eprintln!("                   owns the hook lifecycle). Normally invoked by the platform");
     eprintln!("                   service; advanced users can run it manually.");
@@ -2501,6 +2555,7 @@ fn main() {
         ["roe"] | ["roe", "show"] => roe_show(&prefix),
         ["roe", "set", file] => roe_set(&prefix, file),
         ["monitor"] | ["monitor", "status"] => monitor_status(&prefix),
+        ["signoff", rest @ ..] => signoff::cli(&prefix, rest),
         ["uninstall"] => uninstall(&prefix, false),
         ["uninstall", "--keep-user-rules"] => uninstall(&prefix, true),
         _ => {

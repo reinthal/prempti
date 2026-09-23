@@ -1,0 +1,47 @@
+/* Kebnetrails design tokens — compiled from the design system's tokens.json.
+   Do not hand-edit: change tokens.json in the design system and rebuild. */
+:root, [data-theme="dark"] {
+  --surface-canvas: #14161a;
+  --surface-panel: #1c1f25;
+  --surface-hover: #1a1d23;
+  --surface-selected: #1e2530;
+  --line: #2a2e36;
+  --ink: #d7dae0;
+  --ink-dim: #8b919c;
+  --accent: #58a6ff;
+  --allow: #3fb950;
+  --allow-ground: #1f3a26;
+  --ask: #d29922;
+  --ask-ground: #3a2f12;
+  --deny: #f85149;
+  --deny-ground: #3a1f1f;
+  --defer: #8b949e;
+  --defer-ground: #2a2e36;
+  --syn-cmd: #f0f3f6;
+  --syn-key: #79c0ff;
+  --syn-string: #a5d6ff;
+  --syn-number: #ffa657;
+  --syn-literal: #d2a8ff;
+  --syn-punct: #838b95;
+  --syn-danger: #ff7b72;
+}
+:root {
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-40: 40px;
+  --radius-sm: 4px;
+  --radius-pill: 10px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.title { font-family: var(--font-mono); font-size: 14px; line-height: 1.45; font-weight: 600; }
+.body { font-family: var(--font-mono); font-size: 13px; line-height: 1.45; font-weight: 400; }
+.body-strong { font-family: var(--font-mono); font-size: 13px; line-height: 1.45; font-weight: 600; }
+.meta { font-family: var(--font-mono); font-size: 12px; line-height: 1.45; font-weight: 400; }
+.badge { font-family: var(--font-mono); font-size: 12px; line-height: 1.45; font-weight: 600; }
+.code { font-family: var(--font-mono); font-size: 12px; line-height: 1.45; font-weight: 400; }

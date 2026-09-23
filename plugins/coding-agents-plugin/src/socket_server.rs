@@ -13,9 +13,10 @@ use crossbeam_channel::Sender;
 
 use crate::apply_patch::{self, PatchEntry};
 use crate::audit::AuditDraft;
-use crate::broker::{Broker, BrokerStream, Source};
+use crate::broker::{Broker, BrokerStream, SignoffDecision, Source};
 use crate::event::{EventData, InterceptorRequest};
 use crate::monitor::{Monitor, MonitorJob};
+use crate::signoff::Proof;
 use crate::verdict::Verdict;
 
 /// Hard lower bound on `max_request_bytes`. Below this even a trivial wire
@@ -219,6 +220,11 @@ fn handle_connection(
         return Err("empty request".into());
     }
 
+    // Operator control requests (`premptictl signoff …`) share the socket.
+    if is_control_request(&line) {
+        return handle_control(stream, &line, broker);
+    }
+
     // Parse wire protocol request.
     let request: InterceptorRequest =
         serde_json::from_str(&line).map_err(|e| format!("malformed request: {e}"))?;
@@ -418,6 +424,74 @@ fn handle_connection(
     Ok(())
 }
 
+/// Control requests are distinguished from interceptor requests by a leading
+/// `"kind"` key, which `premptictl` always serializes first. Cheap prefix
+/// check so the hot path pays nothing for it.
+fn is_control_request(line: &str) -> bool {
+    line.trim_start().starts_with("{\"kind\"")
+}
+
+/// Handle an operator control request on the broker socket. Same trust
+/// model as the socket itself (same user): anyone who can connect may list
+/// held requests and deny them; approving needs a valid FIDO2 proof from an
+/// enrolled key. One JSON reply line, then close.
+fn handle_control(stream: BrokerStream, line: &str, broker: &Broker) -> Result<(), String> {
+    let req: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("malformed control request: {e}"))?;
+    let reply = control_reply(&req, broker);
+    write_response_and_close(stream, &reply.to_string());
+    Ok(())
+}
+
+fn control_reply(req: &serde_json::Value, broker: &Broker) -> serde_json::Value {
+    let kind = req.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    match kind {
+        "signoff_list" => serde_json::json!({
+            "ok": true,
+            "enabled": broker.signoff_enabled(),
+            "ttl_secs": broker.signoff_ttl_secs(),
+            "held": broker
+                .held_requests()
+                .iter()
+                .map(|h| h.to_json())
+                .collect::<Vec<_>>(),
+        }),
+        "signoff_resolve" => {
+            let id = req.get("correlation_id").and_then(|v| v.as_u64());
+            let decision = req.get("decision").and_then(|d| d.as_str()).unwrap_or("");
+            let result = match (id, decision) {
+                (None, _) => Err("correlation_id missing".to_string()),
+                (Some(id), "approve") => {
+                    Proof::from_json(req.get("proof").unwrap_or(&serde_json::Value::Null))
+                        .and_then(|p| broker.resolve_signoff(id, SignoffDecision::Approve(p)))
+                }
+                (Some(id), "deny") => {
+                    let reason = req
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .filter(|r| !r.trim().is_empty())
+                        .unwrap_or("denied by operator");
+                    broker.resolve_signoff(id, SignoffDecision::Deny(reason.to_string()))
+                }
+                (Some(_), other) => Err(format!("unknown decision '{other}'")),
+            };
+            match result {
+                Ok(o) => serde_json::json!({
+                    "ok": true,
+                    "decision": o.decision,
+                    "seq": o.seq,
+                    "key_label": o.key_label,
+                }),
+                Err(e) => serde_json::json!({"ok": false, "error": e}),
+            }
+        }
+        other => serde_json::json!({
+            "ok": false,
+            "error": format!("unknown control request kind '{other}'"),
+        }),
+    }
+}
+
 /// Detect whether this request is a codex apply_patch invocation that needs
 /// path-based multiplexing. Returns:
 /// - `Ok(None)` — not a codex apply_patch event; the single-event flow applies.
@@ -535,6 +609,47 @@ mod tests {
             clamp_max_request_bytes(MAX_REQUEST_BYTES_CEILING),
             MAX_REQUEST_BYTES_CEILING
         );
+    }
+
+    #[test]
+    fn control_requests_are_detected_by_leading_kind_key() {
+        assert!(is_control_request(r#"{"kind":"signoff_list"}"#));
+        assert!(is_control_request("  {\"kind\": \"x\"}"));
+        assert!(!is_control_request(
+            r#"{"version":1,"id":"a","agent_name":"claude_code","event":{}}"#
+        ));
+        assert!(!is_control_request(r#"{"id":"a","kind":"x"}"#));
+    }
+
+    #[test]
+    fn control_reply_shapes() {
+        let broker = Broker::new();
+        let list = control_reply(&serde_json::json!({"kind": "signoff_list"}), &broker);
+        assert_eq!(list["ok"], true);
+        assert_eq!(list["enabled"], false);
+        assert!(list["held"].as_array().unwrap().is_empty());
+
+        let bad = control_reply(&serde_json::json!({"kind": "bogus"}), &broker);
+        assert_eq!(bad["ok"], false);
+        assert!(bad["error"].as_str().unwrap().contains("bogus"));
+
+        let no_id = control_reply(
+            &serde_json::json!({"kind": "signoff_resolve", "decision": "deny"}),
+            &broker,
+        );
+        assert!(no_id["error"].as_str().unwrap().contains("correlation_id"));
+
+        let disabled = control_reply(
+            &serde_json::json!({"kind": "signoff_resolve", "decision": "deny", "correlation_id": 1}),
+            &broker,
+        );
+        assert!(disabled["error"].as_str().unwrap().contains("not enabled"));
+
+        let bad_decision = control_reply(
+            &serde_json::json!({"kind": "signoff_resolve", "decision": "maybe", "correlation_id": 1}),
+            &broker,
+        );
+        assert!(bad_decision["error"].as_str().unwrap().contains("maybe"));
     }
 
     fn temp_socket_path(label: &str) -> String {

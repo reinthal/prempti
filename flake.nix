@@ -61,6 +61,11 @@
                   roeFile = "# RoE\nIn scope: 10.0.0.0/24.\n";
                   skipTools = [ "Read" ];
                 };
+                signoff = {
+                  enable = true;
+                  ttlSecs = 120;
+                  keysFile = pkgs.writeText "signoff_keys.json" ''{"v":1,"keys":[]}'';
+                };
                   rules.example = ''
                     - rule: Deny git push
                       desc: test

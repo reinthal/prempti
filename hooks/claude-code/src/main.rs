@@ -93,11 +93,12 @@ struct HookSpecificOutput<'a> {
 
 const DEFAULT_TIMEOUT_MS: u64 = 5000;
 const TIMEOUT_MIN_MS: u64 = 100;
-// 10 minutes: matches Claude Code's default command-hook timeout. The LLM
-// monitor (and, later, human sign-off) can legitimately hold a verdict for
-// far longer than the 5 s rule-only default; `premptictl hook add` sets
-// `PREMPTI_TIMEOUT_MS` on the hook command to match the plugin config.
-const TIMEOUT_MAX_MS: u64 = 600_000;
+// 1 hour. The LLM monitor and hardware-key sign-off can legitimately hold a
+// verdict for far longer than the 5 s rule-only default (a held sign-off
+// waits `signoff.ttl_secs` for the operator); `premptictl hook add` sets
+// `PREMPTI_TIMEOUT_MS` on the hook command to match the plugin config, plus
+// a matching per-hook `timeout` so Claude Code does not kill the hook first.
+const TIMEOUT_MAX_MS: u64 = 3_600_000;
 #[cfg(unix)]
 const SOCKET_SUFFIX: &str = "/.prempti/run/broker.sock";
 /// Default cap on stdin bytes read from the agent. 4 MiB comfortably covers

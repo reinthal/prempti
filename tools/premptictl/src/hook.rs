@@ -37,9 +37,9 @@ fn interceptor_command(prefix: &Path) -> String {
 }
 
 /// Environment prefix we put in front of the interceptor command when the
-/// LLM monitor is enabled, so the interceptor waits long enough for the
-/// second verdict source. The hook runs through a shell, so `VAR=value cmd`
-/// is the portable spelling.
+/// LLM monitor or hardware-key sign-off is enabled, so the interceptor waits
+/// long enough for the second verdict source / the operator. The hook runs
+/// through a shell, so `VAR=value cmd` is the portable spelling.
 const TIMEOUT_ENV_PREFIX: &str = "PREMPTI_TIMEOUT_MS=";
 
 /// Full hook command: the bare interceptor path, optionally prefixed with
@@ -178,7 +178,7 @@ pub fn add(prefix: &Path) -> Result<AddResult, String> {
     };
 
     let bare = interceptor_command(prefix);
-    let timeout_ms = crate::monitor_hook_timeout_ms(prefix);
+    let timeout_ms = crate::hook_timeout_ms(prefix);
     let hook_cmd = hook_command(&bare, timeout_ms);
 
     let (owned, foreign) = scan_pre_tool_use(&settings, &bare);

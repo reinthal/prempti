@@ -223,6 +223,48 @@ rec {
       };
     };
 
+    signoff = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Hardware-key (FIDO2 / YubiKey) sign-off. Every `ask` verdict, from
+          a Falco rule or the LLM monitor, is held in the broker until an
+          operator approves it with an enrolled key (`premptictl signoff
+          approve`) or denies it; unanswered holds are denied after `ttlSecs`.
+          Requires `audit.enable`.
+        '';
+      };
+      ttlSecs = mkOption {
+        type = types.ints.positive;
+        default = 300;
+        description = "Seconds a held call waits for the operator before it is denied. The Claude Code hook timeout is derived from it.";
+      };
+      rpId = mkOption {
+        type = types.str;
+        default = "prempti.local";
+        description = "FIDO2 relying-party id the keys are enrolled under (must match `premptictl signoff enroll`).";
+      };
+      requireUv = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Require user verification (PIN / biometric) on every approval, not just a touch.";
+      };
+      keysFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        example = lib.literalExpression "./signoff_keys.json";
+        description = ''
+          Enrolled keys, installed as `config/signoff_keys.json` (generate
+          with `premptictl signoff enroll` and commit the file; it holds
+          public keys only). With `mutableConfig = false` it is rewritten on
+          every start; with `mutableConfig = true` only when absent, so
+          `premptictl signoff enroll` owns it afterwards. Required when
+          sign-off is enabled unless `mutableConfig` is set.
+        '';
+      };
+    };
+
     supervisor = {
       logRotateBytes = mkOption {
         type = types.ints.positive;
@@ -252,6 +294,14 @@ rec {
       assertion = cfg.monitor.enable -> (cfg.monitor.roeFile != null || cfg.mutableConfig);
       message = "services.prempti.monitor.enable requires services.prempti.monitor.roeFile, or mutableConfig = true and `premptictl roe set <file>`.";
     }
+    {
+      assertion = cfg.signoff.enable -> cfg.audit.enable;
+      message = "services.prempti.signoff.enable requires services.prempti.audit.enable (the key signs the audit record hash).";
+    }
+    {
+      assertion = cfg.signoff.enable -> (cfg.signoff.keysFile != null || cfg.mutableConfig);
+      message = "services.prempti.signoff.enable requires services.prempti.signoff.keysFile, or mutableConfig = true and `premptictl signoff enroll`.";
+    }
   ];
 
   # Build the ExecStartPre script for a resolved `cfg`.
@@ -276,6 +326,8 @@ rec {
         then cfg.monitor.roeFile
         else pkgs.writeText "prempti-roe.md" cfg.monitor.roeFile;
 
+      keysFile = cfg.signoff.keysFile;
+
       initConfig = {
         mode = cfg.mode;
         default_action = cfg.defaultAction;
@@ -296,6 +348,13 @@ rec {
           max_input_bytes = cfg.monitor.maxInputBytes;
           workers = cfg.monitor.workers;
           skip_tools = cfg.monitor.skipTools;
+        };
+        signoff = {
+          enabled = cfg.signoff.enable;
+          ttl_secs = cfg.signoff.ttlSecs;
+          rp_id = cfg.signoff.rpId;
+          require_uv = cfg.signoff.requireUv;
+          keys_path = "${home}/config/signoff_keys.json";
         };
       } // cfg.pluginSettings;
 
@@ -342,17 +401,25 @@ rec {
         then ''[ -e "$prefix/config/roe.md" ] || install -m644 ${roeFile} "$prefix/config/roe.md"''
         else ''install -m644 ${roeFile} "$prefix/config/roe.md"'';
 
+      installKeys =
+        if keysFile == null then ""
+        else if cfg.mutableConfig
+        then ''[ -e "$prefix/config/signoff_keys.json" ] || install -m600 ${keysFile} "$prefix/config/signoff_keys.json"''
+        else ''install -m600 ${keysFile} "$prefix/config/signoff_keys.json"'';
+
       installConfig =
         if cfg.mutableConfig
         then ''
           [ -e "$prefix/config/falco.coding_agents_plugin.yaml" ] || install -m644 ${pluginConfig} "$prefix/config/falco.coding_agents_plugin.yaml"
           [ -e "$prefix/config/supervisor.yaml" ] || install -m644 ${supervisorConfig} "$prefix/config/supervisor.yaml"
           ${installRoe}
+          ${installKeys}
         ''
         else ''
           install -m644 ${pluginConfig} "$prefix/config/falco.coding_agents_plugin.yaml"
           install -m644 ${supervisorConfig} "$prefix/config/supervisor.yaml"
           ${installRoe}
+          ${installKeys}
         '';
     in
     pkgs.writeShellApplication {
