@@ -86,6 +86,9 @@ struct ParsedFields {
     session_id: String,
     permission_mode: String,
     transcript_path: String,
+    // Claude Code subagent identity (empty outside a subagent / for Codex).
+    agent_id: String,
+    agent_type: String,
     // Codex-only fields (empty for Claude Code).
     agent_model: String,
     agent_turn_id: String,
@@ -220,6 +223,18 @@ impl ParsedEvent {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        // Claude Code sets `agent_id` / `agent_type` only for hooks fired
+        // inside a subagent (Agent tool). Empty for the main session.
+        let agent_id = event
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let agent_type = event
+            .get("agent_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         // Codex emits `model` and `turn_id` in every PreToolUse / PermissionRequest
         // payload; Claude Code does not. Default to empty when absent.
         let agent_model = event
@@ -278,6 +293,8 @@ impl ParsedEvent {
             session_id,
             permission_mode,
             transcript_path,
+            agent_id,
+            agent_type,
             agent_model,
             agent_turn_id,
             patch_op,
@@ -327,6 +344,14 @@ impl ParsedEvent {
     pub fn transcript_path(&mut self, payload: &[u8]) -> Option<&str> {
         self.ensure_parsed(payload)
             .map(|f| f.transcript_path.as_str())
+    }
+
+    pub fn agent_id(&mut self, payload: &[u8]) -> Option<&str> {
+        self.ensure_parsed(payload).map(|f| f.agent_id.as_str())
+    }
+
+    pub fn agent_type(&mut self, payload: &[u8]) -> Option<&str> {
+        self.ensure_parsed(payload).map(|f| f.agent_type.as_str())
     }
 
     pub fn agent_model(&mut self, payload: &[u8]) -> Option<&str> {
@@ -704,6 +729,24 @@ mod tests {
         let p = payload_with(r#"{"permission_mode":42}"#);
         let mut pe = ParsedEvent::default();
         assert_eq!(pe.permission_mode(&p), Some(""));
+    }
+
+    #[test]
+    fn parses_agent_id_and_type_when_present() {
+        let p = payload_with(
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","agent_id":"a-1","agent_type":"Explore"}"#,
+        );
+        let mut pe = ParsedEvent::default();
+        assert_eq!(pe.agent_id(&p), Some("a-1"));
+        assert_eq!(pe.agent_type(&p), Some("Explore"));
+    }
+
+    #[test]
+    fn agent_id_and_type_empty_when_missing_or_wrong_type() {
+        let p = payload_with(r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","agent_id":7}"#);
+        let mut pe = ParsedEvent::default();
+        assert_eq!(pe.agent_id(&p), Some(""));
+        assert_eq!(pe.agent_type(&p), Some(""));
     }
 
     #[test]

@@ -103,6 +103,8 @@ One Falco data source: **`coding_agent`**. Two field namespaces:
 | `tool.patch_op` | string | Per-event apply_patch operation for Codex synthetic events: `Add`, `Update`, `Delete`, or `Move`. Empty for all other events. |
 | `agent.permission_mode` | string | Session permission mode reported by the agent (e.g., `default`, `acceptEdits`, `plan`, `bypassPermissions`; Codex also emits `dontAsk`) |
 | `agent.transcript_path` | string | Session transcript file path. Empty when the agent reports `null`. |
+| `agent.id` | string | Claude Code subagent instance identifier (`agent_id`). Empty for the main session and for Codex. |
+| `agent.type` | string | Claude Code subagent type (`agent_type`, e.g. `Explore`, `Plan`, `general-purpose`). Empty for the main session and for Codex. |
 | `agent.model` | string | Model identifier reported by the agent (Codex-only; empty for Claude Code) |
 | `agent.turn_id` | string | Turn identifier within a session (Codex-only; finer than `session_id`; empty for Claude Code) |
 
@@ -213,6 +215,23 @@ Restart-on-failure is the init system's job. The supervisor is dumb: when Falco 
 
 Advanced users can run the supervisor directly via `ctl daemon --prefix <path>` for debugging or non-managed setups. Only one supervisor at a time per prefix because `supervisor.sock` is a singleton.
 
+### LLM monitor (Kebnetrails) — second verdict source
+
+`plugins/coding-agents-plugin/src/monitor.rs`. When `init_config.monitor.enabled` is true, every wire request (minus `monitor.skip_tools`) is also reviewed by an OpenAI-compatible chat model against the operator's **Rules of Engagement** (`monitor.roe_path`, default `~/.prempti/config/roe.md`, see `configs/roe.example.md`). The prompt carries the tool call, session/subagent identity and the tail of the agent transcript (`monitor.max_transcript_bytes`), all inside `<tool_call>` / `<recent_transcript>` delimiters that the system prompt declares untrusted. The model answers `{"verdict":"allow|ask|deny","reason":…,"roe_clause":…}`.
+
+- The broker counts the monitor as one extra completion signal (`expected_signals = falco events + 1`), so the wire verdict waits for both Falco's seen alert and the LLM. `apply_llm_outcome` escalates `deny` / `ask` exactly like a Falco alert (reason prefixed `LLM monitor (<model>): …`); **an LLM `allow` never downgrades a Falco verdict**. If Falco already denied, the worker skips the HTTP call (`skipped:already_responded`).
+- Failures (transport, 5xx, unparseable reply, panic) retry once, then resolve to `monitor.on_error` (`ask` default, or `deny`). A full job queue does the same immediately. Nothing ever silently becomes `allow`.
+- The API key comes from the environment variable named by `monitor.api_key_env` (default `KEBNETRAILS_API_KEY`, fallback `OPENAI_API_KEY`), read once at plugin init; the RoE is read once too, so changes need `premptictl roe set <file>` or a restart. Missing key / empty RoE / bad `on_error` are plugin init failures (fail-fast).
+- HTTP client is `ureq` with rustls on a fixed worker pool (`monitor.workers`), never on the socket thread or Falco's output worker. Pending TTL is raised to cover two attempts.
+- `premptictl hook add` writes `PREMPTI_TIMEOUT_MS=<2×timeout_ms+5000>` in front of the interceptor command and a matching per-hook `timeout` (seconds) whenever the plugin config enables the monitor, and replaces a stale owned entry on restart. `premptictl monitor status` / `premptictl health` report the effective state.
+- Modes: monitor mode logs `would deny` / `would ask` for LLM verdicts too and still defers; passthrough never consults the model.
+
+### Audit trail
+
+`plugins/coding-agents-plugin/src/audit.rs`. One JSON line per wire request in `~/.prempti/log/audit.jsonl` (`init_config.audit_path`), sealed when every signal has arrived (or by the reaper / passthrough). Fields: agent (name, pid, session, `agent_id`/`agent_type`, permission mode, transcript path), tool (name, use id, sha256 of the full `tool_input`, a verbatim copy capped at `audit_input_max_bytes`), `falco` (verdict + every rule hit), `llm` (status, verdict, reason, RoE clause, model, RoE sha256, latency, attempts), `final` (wire verdict + source: `falco` | `llm` | `floor` | `monitor` | `passthrough` | `reaper` | `broker`), latency. Records are hash-chained: `hash = sha256(prev_hash || canonical_json(record without hash))`, canonical = sorted keys, no whitespace; genesis `prev_hash` is 64 zeros. The supervisor deliberately does **not** rotate this file (rotation would break the chain). `premptictl audit verify` walks the chain, `premptictl audit tail [-n N] [-f] [--json]` reads it. The plugin refuses to start if the file cannot be opened.
+
+The broker keeps a pending entry until every expected signal has landed even after it has already responded (deny short-circuit), so late Falco alerts and the LLM outcome still reach the record. `agent.id` / `agent.type` Falco fields expose Claude Code's subagent identity to rules and the seen record.
+
 ### Fail-safety
 
 - **Fail-closed**: if the plugin/Falco is unreachable, tool calls are denied.
@@ -229,9 +248,11 @@ All components are installed under `~/.prempti/`:
 ├── bin/                    # Executables: falco, claude-interceptor, premptictl
 ├── config/
 │   ├── falco.yaml          # Base Falco config (engine, output, isolation)
-│   ├── falco.coding_agents_plugin.yaml  # Plugin config (plugin def, rules, http_output)
+│   ├── falco.coding_agents_plugin.yaml  # Plugin config (plugin def, rules, http_output, audit, monitor)
+│   ├── roe.md              # Rules of Engagement for the LLM monitor (premptictl roe set)
 │   └── supervisor.yaml     # Supervisor config (rotation, stop timeout); preserved on upgrade
 ├── log/                    # Falco logs (rotated by supervisor): falco.log[.1..N], falco.err[.1..N]
+│   └── audit.jsonl         # Hash-chained audit trail (never rotated; premptictl audit verify)
 ├── run/                    # Runtime: broker.sock, supervisor.sock
 ├── share/                  # Shared libraries: libcoding_agent.so (.dylib on macOS, .dll on Windows)
 └── rules/

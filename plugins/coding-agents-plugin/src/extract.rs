@@ -74,6 +74,18 @@ impl CodingAgentPlugin {
         Ok(CString::new(val)?)
     }
 
+    fn extract_agent_id(&mut self, mut req: ExtractRequest<Self>) -> Result<CString, Error> {
+        let payload = self.get_payload(&mut req)?;
+        let val = req.context.agent_id(payload).unwrap_or("");
+        Ok(CString::new(val)?)
+    }
+
+    fn extract_agent_type(&mut self, mut req: ExtractRequest<Self>) -> Result<CString, Error> {
+        let payload = self.get_payload(&mut req)?;
+        let val = req.context.agent_type(payload).unwrap_or("");
+        Ok(CString::new(val)?)
+    }
+
     fn extract_transcript_path(&mut self, mut req: ExtractRequest<Self>) -> Result<CString, Error> {
         let payload = self.get_payload(&mut req)?;
         let val = req.context.transcript_path(payload).unwrap_or("");
@@ -190,6 +202,12 @@ impl ExtractPlugin for CodingAgentPlugin {
         field("agent.transcript_path", &Self::extract_transcript_path)
             .with_display("Transcript Path")
             .with_description("Path to the session transcript file (empty when the agent reports null)"),
+        field("agent.id", &Self::extract_agent_id)
+            .with_display("Subagent ID")
+            .with_description("Claude Code subagent instance identifier (empty for the main session and for Codex)"),
+        field("agent.type", &Self::extract_agent_type)
+            .with_display("Subagent Type")
+            .with_description("Claude Code subagent type, e.g. Explore, Plan, general-purpose (empty for the main session and for Codex)"),
         field("agent.model", &Self::extract_agent_model)
             .with_display("Model")
             .with_description("Model identifier reported by the coding agent (Codex-only; empty for Claude Code)"),

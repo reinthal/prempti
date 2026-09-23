@@ -62,6 +62,8 @@ Rules use the standard [Falco rule language](https://falco.org/docs/rules/). Ava
 | `agent.turn_id` | Turn identifier within a session (Codex-only; empty for Claude Code) |
 | `agent.permission_mode` | Session permission mode (e.g. `default`, `acceptEdits`, `bypassPermissions`) |
 | `agent.transcript_path` | Session transcript file path (empty when the agent reports `null`) |
+| `agent.id` | Claude Code subagent instance identifier (empty for the main session / Codex) |
+| `agent.type` | Claude Code subagent type, e.g. `Explore`, `Plan` (empty for the main session / Codex) |
 | `agent.cwd` | Working directory (raw) |
 | `agent.real_cwd` | Working directory (resolved, absolute) |
 | `agent.real_cwd_prefix` | Resolved working directory with a trailing `/` for path-segment-aware prefix matching |

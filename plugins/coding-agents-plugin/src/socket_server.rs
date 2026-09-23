@@ -12,8 +12,10 @@ use uds_windows::{UnixListener, UnixStream};
 use crossbeam_channel::Sender;
 
 use crate::apply_patch::{self, PatchEntry};
-use crate::broker::{Broker, BrokerStream};
+use crate::audit::AuditDraft;
+use crate::broker::{Broker, BrokerStream, Source};
 use crate::event::{EventData, InterceptorRequest};
+use crate::monitor::{Monitor, MonitorJob};
 use crate::verdict::Verdict;
 
 /// Hard lower bound on `max_request_bytes`. Below this even a trivial wire
@@ -102,8 +104,10 @@ fn prepare_listener(socket_path: &str) -> anyhow::Result<UnixListener> {
 pub fn start(
     socket_path: String,
     max_request_bytes: u64,
+    audit_input_max_bytes: usize,
     event_tx: Sender<EventData>,
     broker: Arc<Broker>,
+    monitor: Option<Arc<Monitor>>,
 ) -> anyhow::Result<std::thread::JoinHandle<()>> {
     let listener = prepare_listener(&socket_path)?;
     let cap = clamp_max_request_bytes(max_request_bytes);
@@ -121,7 +125,17 @@ pub fn start(
 
     std::thread::Builder::new()
         .name("prempti-socket-server".to_string())
-        .spawn(move || run_server(listener, &socket_path, cap, &event_tx, &broker))
+        .spawn(move || {
+            run_server(
+                listener,
+                &socket_path,
+                cap,
+                audit_input_max_bytes,
+                &event_tx,
+                &broker,
+                monitor.as_deref(),
+            )
+        })
         .map_err(|e| anyhow::anyhow!("failed to spawn socket server thread: {e}"))
 }
 
@@ -131,8 +145,10 @@ fn run_server(
     listener: UnixListener,
     _socket_path: &str,
     max_request_bytes: u64,
+    audit_input_max_bytes: usize,
     event_tx: &Sender<EventData>,
     broker: &Broker,
+    monitor: Option<&Monitor>,
 ) {
     // Non-blocking accept + short sleep on WouldBlock lets the loop check the
     // shutdown flag without an extra wake-up mechanism. `UnixListener` does
@@ -160,7 +176,14 @@ fn run_server(
                 // the 8 KB Unix-socket sndbuf default.
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_read_timeout(Some(CONNECTION_READ_TIMEOUT));
-                if let Err(e) = handle_connection(stream, max_request_bytes, event_tx, broker) {
+                if let Err(e) = handle_connection(
+                    stream,
+                    max_request_bytes,
+                    audit_input_max_bytes,
+                    event_tx,
+                    broker,
+                    monitor,
+                ) {
                     log::warn!("connection error: {}", e);
                 }
             }
@@ -180,8 +203,10 @@ fn run_server(
 fn handle_connection(
     stream: BrokerStream,
     max_request_bytes: u64,
+    audit_input_max_bytes: usize,
     event_tx: &Sender<EventData>,
     broker: &Broker,
+    monitor: Option<&Monitor>,
 ) -> Result<(), String> {
     // Read one newline-terminated JSON request, capped at the configured
     // max so a runaway sender can't exhaust memory.
@@ -232,6 +257,41 @@ fn handle_connection(
     // resolving, and existing escalation gives us deny > ask > allow over
     // the combined verdicts.
     let multiplex = try_parse_apply_patch_multiplex(&agent_name, &request.event);
+
+    // Audit draft: the request-time half of the record. Verdict signals are
+    // added by the broker as they arrive; the record is sealed on completion.
+    let mut draft = AuditDraft::from_event(
+        correlation_id,
+        &agent_name,
+        agent_pid,
+        &request.event,
+        audit_input_max_bytes,
+    );
+
+    // LLM monitor: decide up front whether this request gets a second
+    // verdict source, because the broker must count its completion signal
+    // from the moment the entry is registered. Passthrough never waits for
+    // anything, so it never consults the monitor either.
+    let tool_name = request
+        .event
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let monitor_for_request = match monitor {
+        None => None,
+        Some(_) if broker.is_passthrough() => {
+            draft.llm.status = "skipped:passthrough".to_string();
+            None
+        }
+        Some(m) if !m.wants(tool_name) => {
+            draft.llm.status = "skipped:tool_policy".to_string();
+            None
+        }
+        Some(m) => {
+            draft.llm.status = "pending".to_string();
+            Some(m)
+        }
+    };
 
     let events: Vec<EventData> = match multiplex {
         Ok(None) => {
@@ -300,11 +360,26 @@ fn handle_connection(
     };
 
     let expected_events = events.len() as u64;
+    let expected_signals = expected_events + u64::from(monitor_for_request.is_some());
 
     // Register pending request BEFORE enqueuing events. This ensures the
     // broker entry exists before Falco can process any of them and send back
     // an alert.
-    broker.register(correlation_id, wire_id, stream, expected_events);
+    broker.register(correlation_id, wire_id, stream, expected_signals, draft);
+
+    // Hand the raw event to the monitor. A full queue resolves this signal
+    // immediately with the `on_error` verdict — never leave the count short.
+    if let Some(m) = monitor_for_request {
+        let job = MonitorJob {
+            correlation_id,
+            event: Arc::new(request.event.clone()),
+        };
+        if let Err(e) = m.submit(job) {
+            log::warn!("LLM monitor: could not queue {correlation_id}: {e}");
+            let (outcome, reason) = m.error_outcome(&e);
+            broker.apply_llm_outcome(correlation_id, outcome, reason);
+        }
+    }
 
     // Enqueue each synthetic event. If the channel fills mid-emission the
     // broker entry has the wrong expected_events count and would never
@@ -330,7 +405,11 @@ fn handle_connection(
                     expected_events,
                     correlation_id
                 );
-                broker.apply_deny(correlation_id, "event queue full".to_string());
+                broker.apply_deny(
+                    correlation_id,
+                    "event queue full".to_string(),
+                    Source::Internal,
+                );
             }
             return Ok(());
         }

@@ -14,6 +14,7 @@ pub struct E2eHarness {
     pub socket_path: PathBuf,
     pub e2e_dir: PathBuf,
     pub http_port: u16,
+    audit_path: PathBuf,
 }
 
 /// Find the Falco binary from the project's own build output.
@@ -93,6 +94,97 @@ macro_rules! skip_unless_falco {
     };
 }
 
+/// LLM monitor settings for `E2eHarness::start_with_monitor`.
+pub struct MonitorSpec {
+    /// Base URL (`MockLlm::endpoint()`).
+    pub endpoint: String,
+    /// `ask` or `deny`.
+    pub on_error: String,
+    pub timeout_ms: u64,
+    pub skip_tools: Vec<String>,
+    /// Rules of Engagement text handed to the plugin.
+    pub roe: String,
+}
+
+impl MonitorSpec {
+    pub fn new(endpoint: String) -> Self {
+        MonitorSpec {
+            endpoint,
+            on_error: "ask".to_string(),
+            timeout_ms: 5000,
+            skip_tools: Vec::new(),
+            roe: "# Rules of Engagement\n\nIn scope: 10.0.0.0/24. Never touch production.\n"
+                .to_string(),
+        }
+    }
+}
+
+/// Walk an audit file's hash chain (same rules as `premptictl audit
+/// verify`). Returns the number of records.
+pub fn verify_audit_chain(path: &Path) -> Result<usize, String> {
+    use sha2::{Digest, Sha256};
+    fn canonical(v: &serde_json::Value, out: &mut String) {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::Value::String((*k).clone()).to_string());
+                    out.push(':');
+                    canonical(&map[*k], out);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    canonical(item, out);
+                }
+                out.push(']');
+            }
+            other => out.push_str(&other.to_string()),
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut prev = "0".repeat(64);
+    let mut count = 0;
+    for (idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut v: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| format!("line {}: {e}", idx + 1))?;
+        let hash = v["hash"].as_str().unwrap_or("").to_string();
+        v.as_object_mut().unwrap().remove("hash");
+        if v["prev_hash"].as_str() != Some(prev.as_str()) {
+            return Err(format!("line {}: prev_hash mismatch", idx + 1));
+        }
+        let mut body = String::new();
+        canonical(&v, &mut body);
+        let mut hasher = Sha256::new();
+        hasher.update(prev.as_bytes());
+        hasher.update(body.as_bytes());
+        let computed: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if computed != hash {
+            return Err(format!("line {}: hash mismatch", idx + 1));
+        }
+        prev = hash;
+        count += 1;
+    }
+    Ok(count)
+}
+
 impl E2eHarness {
     /// Start Falco with the plugin in the given mode and the plugin-default
     /// no-rule-match floor (`default_action = allow`).
@@ -106,7 +198,7 @@ impl E2eHarness {
     /// guardrails mode only; monitor/passthrough always resolve as defer.
     /// Returns `None` if Falco or the plugin is not available.
     pub fn start_with_default_action(mode: &str, default_action: &str) -> Option<Self> {
-        Self::start_internal(mode, default_action, false)
+        Self::start_internal(mode, default_action, false, None)
     }
 
     /// Start Falco with the repository's shipped default and seen rules.
@@ -114,10 +206,21 @@ impl E2eHarness {
     /// security regressions in production macros must be exercised against
     /// the exact YAML that users install.
     pub fn start_with_shipped_rules(mode: &str) -> Option<Self> {
-        Self::start_internal(mode, "allow", true)
+        Self::start_internal(mode, "allow", true, None)
     }
 
-    fn start_internal(mode: &str, default_action: &str, shipped_rules: bool) -> Option<Self> {
+    /// Start with the LLM monitor enabled against `spec.endpoint` (normally
+    /// a `mock_llm::MockLlm`). The compact fixture rules are used.
+    pub fn start_with_monitor(mode: &str, spec: &MonitorSpec) -> Option<Self> {
+        Self::start_internal(mode, "allow", false, Some(spec))
+    }
+
+    fn start_internal(
+        mode: &str,
+        default_action: &str,
+        shipped_rules: bool,
+        monitor: Option<&MonitorSpec>,
+    ) -> Option<Self> {
         let falco_bin = find_falco()?;
         let plugin_lib = find_plugin_lib()?;
         // Skip only if NO interceptor is built. Per-test binary requirements
@@ -157,6 +260,31 @@ impl E2eHarness {
             vec![rules_dir.join("deny.yaml"), rules_dir.join("seen.yaml")]
         };
 
+        // Audit trail always on: every E2E run leaves a verifiable chain.
+        let audit_path = e2e_dir.join("audit.jsonl");
+        let mut extra_init = format!(
+            "      audit_path: \"{}\"\n",
+            to_forward_slashes(&audit_path)
+        );
+        if let Some(spec) = monitor {
+            let roe_path = e2e_dir.join("roe.md");
+            std::fs::write(&roe_path, &spec.roe).expect("write RoE");
+            let skip = spec
+                .skip_tools
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            extra_init.push_str(&format!(
+                "      monitor:\n        enabled: true\n        endpoint: \"{}\"\n        model: \"mock-model\"\n        api_key_env: KEBNETRAILS_API_KEY\n        roe_path: \"{}\"\n        timeout_ms: {}\n        on_error: {}\n        max_transcript_bytes: 4096\n        workers: 2\n        skip_tools: [{}]\n",
+                spec.endpoint,
+                to_forward_slashes(&roe_path),
+                spec.timeout_ms,
+                spec.on_error,
+                skip
+            ));
+        }
+
         // Write Falco config.
         let config_path = e2e_dir.join("falco.yaml");
         write_falco_config(
@@ -167,6 +295,7 @@ impl E2eHarness {
             http_port,
             mode,
             default_action,
+            &extra_init,
         );
 
         // Start Falco.
@@ -180,6 +309,9 @@ impl E2eHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .current_dir(falco_dir);
+        if monitor.is_some() {
+            cmd.env("KEBNETRAILS_API_KEY", "e2e-test-key");
+        }
 
         // Release the reserved port immediately before Falco/plugin startup.
         drop(reserved_http_port);
@@ -229,7 +361,49 @@ impl E2eHarness {
             socket_path,
             e2e_dir,
             http_port,
+            audit_path,
         })
+    }
+
+    /// Path of this instance's audit trail.
+    pub fn audit_path(&self) -> &Path {
+        &self.audit_path
+    }
+
+    /// Parsed audit records written so far.
+    pub fn audit_records(&self) -> Vec<serde_json::Value> {
+        let text = std::fs::read_to_string(&self.audit_path).unwrap_or_default();
+        text.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("audit line JSON"))
+            .collect()
+    }
+
+    /// Wait (up to ~3 s) until at least `n` audit records exist. The record
+    /// is sealed a hair after the wire response, so callers poll.
+    pub fn wait_for_audit_records(&self, n: usize) -> Vec<serde_json::Value> {
+        for _ in 0..60 {
+            let recs = self.audit_records();
+            if recs.len() >= n {
+                return recs;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        self.audit_records()
+    }
+
+    /// Run a Claude Code hook event with extra interceptor environment.
+    pub fn run_hook_env(
+        &self,
+        input: &str,
+        env: &[(&str, &str)],
+    ) -> interceptor::InterceptorResult {
+        interceptor::run_interceptor_for(
+            AgentKind::Claude,
+            input,
+            &self.socket_path.to_string_lossy(),
+            env,
+        )
     }
 
     /// Run a Claude Code hook event through the interceptor against this
@@ -315,6 +489,7 @@ fn write_falco_config(
     http_port: u16,
     mode: &str,
     default_action: &str,
+    extra_init_config: &str,
 ) {
     let rules_entries = rules_files
         .iter()
@@ -335,7 +510,7 @@ plugins:
       http_port: {http_port}
       mode: {mode}
       default_action: {default_action}
-load_plugins:
+{extra_init_config}load_plugins:
   - coding_agent
 rules_files:
 {rules_entries}
@@ -498,7 +673,7 @@ fn write_rules(rules_dir: &Path) {
     let seen_rule = r#"- rule: Coding Agent Event Seen
   desc: Catch-all rule signaling evaluation complete
   condition: correlation.id > 0
-  output: "id=%correlation.id agent=%agent.name tool=%tool.name cwd=%agent.real_cwd path=%tool.real_file_path cmd=%tool.input_command"
+  output: "id=%correlation.id agent=%agent.name agent_id=%agent.id agent_type=%agent.type tool=%tool.name cwd=%agent.real_cwd path=%tool.real_file_path cmd=%tool.input_command"
   priority: DEBUG
   source: coding_agent
   tags: [coding_agent_seen]

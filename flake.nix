@@ -55,6 +55,12 @@
                   mode = "monitor";
                 pluginSettings.deny_tags = [ "coding_agent_deny" "team_deny" ];
                 settings.log_level = "info";
+                monitor = {
+                  enable = true;
+                  environmentFile = "/run/secrets/kebnetrails.env";
+                  roeFile = "# RoE\nIn scope: 10.0.0.0/24.\n";
+                  skipTools = [ "Read" ];
+                };
                   rules.example = ''
                     - rule: Deny git push
                       desc: test

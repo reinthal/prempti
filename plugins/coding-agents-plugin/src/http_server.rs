@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::sync::Arc;
 
-use crate::broker::Broker;
+use crate::broker::{Broker, Source};
 use crate::config::CodingAgentConfig;
 
 /// Max HTTP request body size (1MB — Falco alerts are typically a few KB).
@@ -59,10 +59,7 @@ impl HttpServerHandle {
 /// Returns an error if the port is already in use. The caller (`Plugin::new`)
 /// propagates this as a Falco plugin init failure rather than panicking, so a
 /// stray second Falco instance can't take down the host process.
-pub fn start(
-    config: &CodingAgentConfig,
-    broker: Arc<Broker>,
-) -> anyhow::Result<HttpServerHandle> {
+pub fn start(config: &CodingAgentConfig, broker: Arc<Broker>) -> anyhow::Result<HttpServerHandle> {
     let deny_tags = config.deny_tags.clone();
     let ask_tags = config.ask_tags.clone();
     let seen_tags = config.seen_tags.clone();
@@ -79,10 +76,10 @@ pub fn start(
 
     log::info!(
         "HTTP alert receiver listening on {}",
-        server.server_addr().to_ip().map_or_else(
-            || bind_addr.to_string(),
-            |addr| addr.to_string(),
-        )
+        server
+            .server_addr()
+            .to_ip()
+            .map_or_else(|| bind_addr.to_string(), |addr| addr.to_string(),)
     );
 
     let server_clone = Arc::clone(&server);
@@ -106,7 +103,11 @@ fn run_server(
         // tiny_http is synchronous so we process sequentially in this thread,
         // which is fine because Falco's output worker is also single-threaded.
         let mut body = String::new();
-        if let Err(e) = request.as_reader().take(MAX_BODY_SIZE).read_to_string(&mut body) {
+        if let Err(e) = request
+            .as_reader()
+            .take(MAX_BODY_SIZE)
+            .read_to_string(&mut body)
+        {
             log::warn!("failed to read HTTP request body: {}", e);
             let _ = request.respond(tiny_http::Response::empty(200));
             continue;
@@ -151,11 +152,23 @@ fn run_server(
         match verdict_type {
             VerdictType::Deny => {
                 log::debug!("deny alert for {} (rule={})", correlation_id, alert.rule);
-                broker.apply_deny(correlation_id, reason);
+                broker.apply_deny(
+                    correlation_id,
+                    reason,
+                    Source::Falco {
+                        rule: alert.rule.clone(),
+                    },
+                );
             }
             VerdictType::Ask => {
                 log::debug!("ask alert for {} (rule={})", correlation_id, alert.rule);
-                broker.apply_ask(correlation_id, reason);
+                broker.apply_ask(
+                    correlation_id,
+                    reason,
+                    Source::Falco {
+                        rule: alert.rule.clone(),
+                    },
+                );
             }
             VerdictType::Seen => {
                 log::debug!("seen alert for {}", correlation_id);

@@ -36,13 +36,48 @@ fn interceptor_command(prefix: &Path) -> String {
     }
 }
 
+/// Environment prefix we put in front of the interceptor command when the
+/// LLM monitor is enabled, so the interceptor waits long enough for the
+/// second verdict source. The hook runs through a shell, so `VAR=value cmd`
+/// is the portable spelling.
+const TIMEOUT_ENV_PREFIX: &str = "PREMPTI_TIMEOUT_MS=";
+
+/// Full hook command: the bare interceptor path, optionally prefixed with
+/// `PREMPTI_TIMEOUT_MS=<ms>`.
+fn hook_command(bare: &str, timeout_ms: Option<u64>) -> String {
+    match timeout_ms {
+        Some(ms) => format!("{TIMEOUT_ENV_PREFIX}{ms} {bare}"),
+        None => bare.to_string(),
+    }
+}
+
+/// Drop a leading `PREMPTI_TIMEOUT_MS=<digits> ` so ownership checks see
+/// the bare interceptor path whether or not the monitor was enabled when
+/// the hook was written.
+pub(crate) fn strip_timeout_prefix(cmd: &str) -> &str {
+    let Some(rest) = cmd.strip_prefix(TIMEOUT_ENV_PREFIX) else {
+        return cmd;
+    };
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return cmd;
+    }
+    match rest[digits..].strip_prefix(' ') {
+        Some(bare) => bare,
+        None => cmd,
+    }
+}
+
 /// Decide whether a hook command in `~/.claude/settings.json` belongs to a
 /// Prempti install. We match exactly against the command we'd write for the
 /// current prefix, plus a handful of well-known path suffixes so that legacy
 /// `coding-agents-kit` installs and non-default prefixes are still cleaned up
 /// — without sweeping arbitrary user hooks that merely mention the substring
 /// `claude-interceptor` (e.g. wrappers like `python my-claude-interceptor.py`).
+/// A `PREMPTI_TIMEOUT_MS=<ms>` prefix on either side is ignored.
 fn is_owned_interceptor_command(cmd: &str, expected: &str) -> bool {
+    let cmd = strip_timeout_prefix(cmd);
+    let expected = strip_timeout_prefix(expected);
     if cmd == expected {
         return true;
     }
@@ -142,7 +177,30 @@ pub fn add(prefix: &Path) -> Result<AddResult, String> {
         serde_json::json!({})
     };
 
-    let hook_cmd = interceptor_command(prefix);
+    let bare = interceptor_command(prefix);
+    let timeout_ms = crate::monitor_hook_timeout_ms(prefix);
+    let hook_cmd = hook_command(&bare, timeout_ms);
+
+    let (owned, foreign) = scan_pre_tool_use(&settings, &bare);
+    if owned.iter().any(|c| c == &hook_cmd) {
+        return Ok(AddResult::AlreadyRegistered);
+    }
+    if owned.is_empty() && !foreign.is_empty() {
+        // An interceptor-like hook we don't own: leave it alone, as before.
+        return Ok(AddResult::AlreadyRegistered);
+    }
+    if !owned.is_empty() {
+        // Ours, but written with a different timeout prefix (monitor toggled
+        // since): replace so the interceptor wait matches the plugin config.
+        strip_owned_hooks(&mut settings, &bare);
+    }
+
+    let mut entry = serde_json::json!({"type": "command", "command": hook_cmd});
+    if let Some(ms) = timeout_ms {
+        // Claude Code's per-hook timeout is in seconds; give the interceptor
+        // its own wait plus a little slack so Claude never kills it first.
+        entry["timeout"] = serde_json::json!(ms.div_ceil(1000) + 5);
+    }
     let hooks = settings
         .as_object_mut()
         .unwrap()
@@ -153,25 +211,9 @@ pub fn add(prefix: &Path) -> Result<AddResult, String> {
         .unwrap()
         .entry("PreToolUse")
         .or_insert_with(|| serde_json::json!([]));
-
-    if let Some(arr) = pre_tool.as_array() {
-        for group in arr {
-            if let Some(group_hooks) = group.get("hooks").and_then(|h| h.as_array()) {
-                for h in group_hooks {
-                    if h.get("command")
-                        .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.contains("claude-interceptor"))
-                    {
-                        return Ok(AddResult::AlreadyRegistered);
-                    }
-                }
-            }
-        }
-    }
-
     pre_tool.as_array_mut().unwrap().push(serde_json::json!({
         "matcher": "",
-        "hooks": [{"type": "command", "command": hook_cmd}]
+        "hooks": [entry]
     }));
 
     if let Some(parent) = path.parent() {
@@ -400,6 +442,52 @@ mod tests {
             r"C:\Users\u\AppData\Local\prempti\bin\claude-interceptor.exe",
             expected
         ));
+    }
+
+    #[test]
+    fn ownership_ignores_timeout_env_prefix() {
+        let expected = "$HOME/.prempti/bin/claude-interceptor";
+        assert!(is_owned_interceptor_command(
+            "PREMPTI_TIMEOUT_MS=45000 $HOME/.prempti/bin/claude-interceptor",
+            expected
+        ));
+        assert!(is_owned_interceptor_command(
+            expected,
+            "PREMPTI_TIMEOUT_MS=45000 $HOME/.prempti/bin/claude-interceptor"
+        ));
+        assert!(is_owned_interceptor_command(
+            "PREMPTI_TIMEOUT_MS=1 /opt/prempti/bin/claude-interceptor",
+            expected
+        ));
+    }
+
+    #[test]
+    fn strip_timeout_prefix_only_strips_well_formed_prefix() {
+        assert_eq!(
+            strip_timeout_prefix("PREMPTI_TIMEOUT_MS=5000 /x/bin/claude-interceptor"),
+            "/x/bin/claude-interceptor"
+        );
+        assert_eq!(
+            strip_timeout_prefix("/x/bin/claude-interceptor"),
+            "/x/bin/claude-interceptor"
+        );
+        assert_eq!(
+            strip_timeout_prefix("PREMPTI_TIMEOUT_MS= /x"),
+            "PREMPTI_TIMEOUT_MS= /x"
+        );
+        assert_eq!(
+            strip_timeout_prefix("PREMPTI_TIMEOUT_MS=12"),
+            "PREMPTI_TIMEOUT_MS=12"
+        );
+    }
+
+    #[test]
+    fn hook_command_formats_prefix() {
+        assert_eq!(hook_command("/x/ci", None), "/x/ci");
+        assert_eq!(
+            hook_command("/x/ci", Some(45000)),
+            "PREMPTI_TIMEOUT_MS=45000 /x/ci"
+        );
     }
 
     #[test]

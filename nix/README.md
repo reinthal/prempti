@@ -67,6 +67,16 @@ Exposes Prempti as a NixOS / home-manager service. Linux only (x86_64, aarch64).
 | `mutableConfig` | `false` | See below |
 | `defaultRules.enable` | `true` | Ship upstream ruleset |
 | `rules.<name>` | `{}` | Inline YAML or path → `rules/user/nix-<name>.yaml` |
+| `audit.enable` | `true` | Hash-chained `log/audit.jsonl`; `premptictl audit verify\|tail` |
+| `audit.inputMaxBytes` | `16384` | Verbatim `tool_input` per record (sha256 always kept) |
+| `monitor.enable` | `false` | LLM monitor (second verdict source) |
+| `monitor.endpoint` / `model` | DeepSeek v4.1 flash | OpenAI-compatible chat completions |
+| `monitor.apiKeyEnv` | `KEBNETRAILS_API_KEY` | Falls back to `OPENAI_API_KEY` |
+| `monitor.environmentFile` | `null` | systemd `EnvironmentFile` with the token; required when enabled |
+| `monitor.roeFile` | `null` | Rules of Engagement (path or text) → `config/roe.md` |
+| `monitor.timeoutMs` / `onError` | `20000` / `ask` | Hook timeout is derived from `timeoutMs` |
+| `monitor.maxTranscriptBytes` / `maxInputBytes` / `workers` | `32768` / `8192` / `4` | |
+| `monitor.skipTools` | `[]` | e.g. `[ "Read" "Glob" "Grep" ]` |
 | `supervisor.logRotateBytes` | `10485760` | |
 | `supervisor.logRotateKeep` | `3` | |
 | `supervisor.stopTimeoutSecs` | `20` | |
@@ -95,6 +105,28 @@ services.prempti = {
 `settings` keys land in the fragment that Falco loads after `falco.yaml`
 (`config_files`), so scalars there override the base config. Hand-written
 files in `rules/user/` are never touched.
+
+## LLM monitor (Kebnetrails)
+
+```nix
+services.prempti = {
+  enable = true;
+  monitor = {
+    enable = true;
+    environmentFile = config.sops.secrets."kebnetrails.env".path; # KEBNETRAILS_API_KEY=...
+    roeFile = ./roe.md;
+    skipTools = [ "Read" "Glob" "Grep" ];
+  };
+};
+```
+
+Every tool call is sent to the model together with the RoE and the tail of
+the agent transcript; `ask` / `deny` escalate the Falco verdict, `allow`
+leaves it alone. The key is read from the unit's environment once at plugin
+start, so it is visible in the Falco process environment for the same user.
+`premptictl monitor status` shows the effective settings; `premptictl roe
+set <file>` swaps the RoE and restarts the service; `premptictl audit
+tail -f` follows the trail.
 
 ## How it maps onto upstream's layout
 

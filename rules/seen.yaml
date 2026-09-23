@@ -10,6 +10,7 @@
     correlation=%correlation.id agent=%agent.name os=%agent.os agent_pid=%agent.pid
     session=%agent.session_id turn=%agent.turn_id model=%agent.model
     permission_mode=%agent.permission_mode transcript=%agent.transcript_path
+    agent_id=%agent.id agent_type=%agent.type
     hook=%agent.hook_event_name tool=%tool.name tool_use_id=%tool.use_id
     cwd=%agent.real_cwd cwd_prefix=%agent.real_cwd_prefix raw_cwd=%agent.cwd
     file=%tool.real_file_path file_name=%tool.file_name raw_file=%tool.file_path

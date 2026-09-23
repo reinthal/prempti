@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+mod audit;
 mod daemon;
 mod hook;
 mod hook_codex;
@@ -55,6 +56,318 @@ fn default_prefix() -> PathBuf {
 
 fn plugin_config_path(prefix: &PathBuf) -> PathBuf {
     prefix.join("config/falco.coding_agents_plugin.yaml")
+}
+
+// ---------------------------------------------------------------------------
+// LLM monitor settings (read from the plugin config fragment)
+// ---------------------------------------------------------------------------
+
+/// Default interceptor wait when the monitor is off (matches the
+/// interceptor's own built-in default).
+const HOOK_TIMEOUT_DEFAULT_MS: u64 = 5000;
+
+/// Interceptor wait to configure when the monitor is on: two LLM attempts
+/// plus slack for Falco and the socket round-trip.
+fn hook_timeout_for(monitor_timeout_ms: u64) -> u64 {
+    2 * monitor_timeout_ms + 5000
+}
+
+/// Scalar keys of the `monitor:` block of the plugin config, in file
+/// order. `None` when there is no such block. Line-oriented like `mode:`
+/// handling (no YAML parser in premptictl): the block is every subsequent
+/// line indented deeper than `monitor:` itself. Values lose surrounding
+/// quotes and trailing `# comments`.
+fn parse_monitor_block(yaml: &str) -> Option<Vec<(String, String)>> {
+    let indent_of = |l: &str| l.len() - l.trim_start().len();
+    let mut lines = yaml.lines();
+    let block_indent = loop {
+        let line = lines.next()?;
+        let trimmed = line.trim();
+        if trimmed == "monitor:" {
+            break indent_of(line);
+        }
+    };
+    let mut out = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if indent_of(line) <= block_indent {
+            break;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let value = value
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
+        out.push((key.trim().to_string(), value));
+    }
+    Some(out)
+}
+
+/// `(enabled, timeout_ms)` from the `monitor:` block, with the plugin's
+/// defaults for absent keys. `None` when there is no block.
+fn parse_monitor_settings(yaml: &str) -> Option<(bool, u64)> {
+    let block = parse_monitor_block(yaml)?;
+    let mut enabled = false;
+    let mut timeout_ms = 20_000;
+    for (key, value) in block {
+        match key.as_str() {
+            "enabled" => enabled = value == "true",
+            "timeout_ms" => {
+                if let Ok(v) = value.parse::<u64>() {
+                    timeout_ms = v;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some((enabled, timeout_ms))
+}
+
+/// Path of the Rules of Engagement document the plugin reads by default.
+fn roe_path(prefix: &Path) -> PathBuf {
+    prefix.join("config/roe.md")
+}
+
+/// `premptictl roe show` — path, size, sha256 and contents of the RoE.
+fn roe_show(prefix: &PathBuf) {
+    let path = roe_path(prefix);
+    match fs::read(&path) {
+        Ok(bytes) => {
+            println!("Rules of Engagement: {}", path.display());
+            println!("  size:   {} bytes", bytes.len());
+            println!("  sha256: {}", audit::sha256_hex(&bytes));
+            println!();
+            print!("{}", String::from_utf8_lossy(&bytes));
+            if !bytes.ends_with(b"\n") {
+                println!();
+            }
+        }
+        Err(e) => {
+            eprintln!("No Rules of Engagement at {} ({e}).", path.display());
+            eprintln!("Install one with: premptictl roe set <file>");
+            process::exit(1);
+        }
+    }
+}
+
+/// `premptictl roe set <file>` — install a new RoE and restart the service
+/// so the plugin re-reads it (the RoE is read once at plugin init).
+fn roe_set(prefix: &PathBuf, source: &str) {
+    let text = fs::read_to_string(source).unwrap_or_else(|e| {
+        eprintln!("error reading {source}: {e}");
+        process::exit(1);
+    });
+    if text.trim().is_empty() {
+        eprintln!("error: {source} is empty; refusing to install an empty Rules of Engagement");
+        process::exit(1);
+    }
+    let path = roe_path(prefix);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let was_running = is_service_running();
+    let hook_was_registered = hook::is_registered();
+    let codex_hook_was_enabled = hook_codex::is_enabled(prefix);
+
+    fs::write(&path, &text).unwrap_or_else(|e| {
+        eprintln!("error writing {}: {e}", path.display());
+        process::exit(1);
+    });
+    println!(
+        "Rules of Engagement installed at {} (sha256 {})",
+        path.display(),
+        &audit::sha256_hex(text.as_bytes())[..16]
+    );
+
+    if !was_running {
+        println!("(Service is not running. Start it to apply: premptictl start)");
+        return;
+    }
+    println!("Restarting service to load the new Rules of Engagement...");
+    print_restart_warning();
+    eprintln!();
+    service_restart_inner(prefix, hook_was_registered, codex_hook_was_enabled);
+    println!();
+    println!("Rules of Engagement applied.");
+}
+
+/// `premptictl monitor status` — what the plugin config says about the LLM
+/// monitor, plus the local preconditions (RoE present, key env var set in
+/// *this* shell, hook timeout the interceptor will be given).
+fn monitor_status(prefix: &PathBuf) {
+    let config_path = plugin_config_path(prefix);
+    let data = fs::read_to_string(&config_path).unwrap_or_else(|e| {
+        eprintln!("error reading {}: {e}", config_path.display());
+        process::exit(1);
+    });
+    let Some(block) = parse_monitor_block(&data) else {
+        println!(
+            "LLM monitor: not configured (no `monitor:` block in {})",
+            config_path.display()
+        );
+        return;
+    };
+    let get = |k: &str| {
+        block
+            .iter()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| v.as_str())
+    };
+    let enabled = get("enabled") == Some("true");
+    println!(
+        "LLM monitor: {}",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    for key in [
+        "endpoint",
+        "model",
+        "timeout_ms",
+        "on_error",
+        "workers",
+        "max_transcript_bytes",
+        "max_input_bytes",
+        "skip_tools",
+    ] {
+        if let Some(v) = get(key) {
+            println!("  {key:<21} {v}");
+        }
+    }
+    let key_env = get("api_key_env").unwrap_or("KEBNETRAILS_API_KEY");
+    let key_present = env::var(key_env)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+        || env::var("OPENAI_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+    println!(
+        "  {:<21} {} ({} in this shell; the service reads its own environment)",
+        "api key",
+        key_env,
+        if key_present { "set" } else { "NOT set" }
+    );
+    let roe = get("roe_path")
+        .map(|p| PathBuf::from(hook::expand_home(p)))
+        .unwrap_or_else(|| roe_path(prefix));
+    match fs::read(&roe) {
+        Ok(bytes) => println!(
+            "  {:<21} {} ({} bytes, sha256 {})",
+            "roe",
+            roe.display(),
+            bytes.len(),
+            &audit::sha256_hex(&bytes)[..16]
+        ),
+        Err(_) => println!("  {:<21} {} (MISSING)", "roe", roe.display()),
+    }
+    match monitor_hook_timeout_ms(prefix) {
+        Some(ms) => println!(
+            "  {:<21} PREMPTI_TIMEOUT_MS={ms} on the Claude Code hook",
+            "hook timeout"
+        ),
+        None => println!(
+            "  {:<21} default ({HOOK_TIMEOUT_DEFAULT_MS} ms)",
+            "hook timeout"
+        ),
+    }
+    if enabled && !key_present {
+        println!();
+        println!("  note: set {key_env} in the service environment (EnvironmentFile) or the plugin will fail to start.");
+    }
+}
+
+/// After a healthy synthetic event, report what the LLM monitor did with it
+/// (from the newest audit record for the health-check session).
+fn print_health_monitor_outcome(prefix: &Path) {
+    if monitor_hook_timeout_ms(prefix).is_none() {
+        return;
+    }
+    let path = audit::audit_path(prefix);
+    for _ in 0..20 {
+        if let Ok(text) = fs::read_to_string(&path) {
+            let rec = text
+                .lines()
+                .rev()
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .find(|v| v["agent"]["session_id"] == "health-check");
+            if let Some(v) = rec {
+                let status = v["llm"]["status"].as_str().unwrap_or("?");
+                let verdict = v["llm"]["verdict"].as_str().unwrap_or("");
+                let ms = v["llm"]["latency_ms"].as_u64().unwrap_or(0);
+                if status == "ok" {
+                    println!(
+                        "LLM monitor: OK ({verdict} in {ms} ms, model {})",
+                        v["llm"]["model"].as_str().unwrap_or("?")
+                    );
+                } else {
+                    println!("LLM monitor: {status} (resolved as {verdict})");
+                }
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    println!("LLM monitor: no audit record found for the health check");
+}
+
+/// `Some(interceptor timeout ms)` when the plugin config enables the LLM
+/// monitor; `None` when it is off or the config is unreadable.
+pub(crate) fn monitor_hook_timeout_ms(prefix: &Path) -> Option<u64> {
+    let data = fs::read_to_string(plugin_config_path(&prefix.to_path_buf())).ok()?;
+    parse_monitor_settings(&data)
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, t)| hook_timeout_for(t))
+}
+
+#[cfg(test)]
+mod monitor_settings_tests {
+    use super::*;
+
+    #[test]
+    fn no_block_is_none() {
+        assert_eq!(parse_monitor_settings("plugins:\n  - name: x\n"), None);
+    }
+
+    #[test]
+    fn block_defaults_and_values() {
+        let yaml = "plugins:\n  - name: coding_agent\n    init_config:\n      mode: guardrails\n      monitor:\n        enabled: true\n        timeout_ms: 12000 # per attempt\n        model: m\n      http_port: 2802\nload_plugins:\n";
+        assert_eq!(parse_monitor_settings(yaml), Some((true, 12000)));
+        let off = "init_config:\n  monitor:\n    endpoint: x\n";
+        assert_eq!(parse_monitor_settings(off), Some((false, 20_000)));
+    }
+
+    #[test]
+    fn block_ends_at_dedent() {
+        let yaml = "monitor:\n  enabled: false\nother:\n  enabled: true\n";
+        assert_eq!(parse_monitor_settings(yaml), Some((false, 20_000)));
+    }
+
+    #[test]
+    fn hook_timeout_formula() {
+        assert_eq!(hook_timeout_for(20_000), 45_000);
+    }
+
+    #[test]
+    fn block_keys_are_unquoted_and_ordered() {
+        let yaml = "monitor:\n  enabled: true\n  endpoint: \"https://x/v1\" # api\n  skip_tools: [\"Read\"]\n";
+        let block = parse_monitor_block(yaml).unwrap();
+        assert_eq!(block[0], ("enabled".to_string(), "true".to_string()));
+        assert_eq!(
+            block[1],
+            ("endpoint".to_string(), "https://x/v1".to_string())
+        );
+        assert_eq!(
+            block[2],
+            ("skip_tools".to_string(), "[\"Read\"]".to_string())
+        );
+    }
 }
 
 fn print_restart_warning() {
@@ -1227,7 +1540,12 @@ fn health(prefix: &PathBuf) {
 
     let output = Command::new(&interceptor)
         .env("PREMPTI_SOCKET", &socket)
-        .env("PREMPTI_TIMEOUT_MS", "5000")
+        .env(
+            "PREMPTI_TIMEOUT_MS",
+            monitor_hook_timeout_ms(prefix)
+                .unwrap_or(HOOK_TIMEOUT_DEFAULT_MS)
+                .to_string(),
+        )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -1245,7 +1563,10 @@ fn health(prefix: &PathBuf) {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             match classify_health_stdout(&stdout) {
-                Ok(msg) => println!("{msg}"),
+                Ok(msg) => {
+                    println!("{msg}");
+                    print_health_monitor_outcome(prefix);
+                }
                 Err(msg) => {
                     eprintln!("{msg}");
                     process::exit(1);
@@ -2024,6 +2345,12 @@ fn print_usage() {
     eprintln!("                     --no-color      pretty layout without ANSI colors");
     eprintln!("                     --no-stats      pretty layout without status line");
     eprintln!();
+    eprintln!("  roe show         Print the Rules of Engagement the LLM monitor uses");
+    eprintln!("  roe set FILE     Install FILE as config/roe.md and restart the service");
+    eprintln!("  monitor status   Show LLM monitor configuration and preconditions");
+    eprintln!("  audit verify     Verify the hash chain of log/audit.jsonl");
+    eprintln!("  audit tail       Print recent audit records (-n N, -f, --json)");
+    eprintln!();
     eprintln!("  daemon [flags]   Run the supervisor (spawns Falco, owns logs and rotation,");
     eprintln!("                   owns the hook lifecycle). Normally invoked by the platform");
     eprintln!("                   service; advanced users can run it manually.");
@@ -2169,6 +2496,10 @@ fn main() {
                 process::exit(2);
             }
         },
+        ["audit", rest @ ..] => audit::cli(&prefix, rest),
+        ["roe"] | ["roe", "show"] => roe_show(&prefix),
+        ["roe", "set", file] => roe_set(&prefix, file),
+        ["monitor"] | ["monitor", "status"] => monitor_status(&prefix),
         ["uninstall"] => uninstall(&prefix, false),
         ["uninstall", "--keep-user-rules"] => uninstall(&prefix, true),
         _ => {

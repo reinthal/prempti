@@ -131,6 +131,98 @@ rec {
       '';
     };
 
+    audit = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Write one hash-chained JSON record per tool call to `log/audit.jsonl` (`premptictl audit verify|tail`).";
+      };
+      inputMaxBytes = mkOption {
+        type = types.ints.unsigned;
+        default = 16384;
+        description = "Bytes of serialized `tool_input` stored verbatim per record (the sha256 of the full input is always recorded).";
+      };
+    };
+
+    monitor = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable the Kebnetrails LLM monitor: every tool call is reviewed by a
+          model against the Rules of Engagement and may be escalated to
+          `ask` or `deny`. Falco verdicts are never downgraded.
+        '';
+      };
+      endpoint = mkOption {
+        type = types.str;
+        default = "https://api.deepseek.com/v1";
+        description = "OpenAI-compatible base URL; the plugin POSTs to `<endpoint>/chat/completions`.";
+      };
+      model = mkOption {
+        type = types.str;
+        default = "deepseek-v4.1-flash";
+        description = "Model name sent in the request.";
+      };
+      apiKeyEnv = mkOption {
+        type = types.str;
+        default = "KEBNETRAILS_API_KEY";
+        description = "Environment variable holding the bearer token (falls back to `OPENAI_API_KEY`).";
+      };
+      environmentFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        example = lib.literalExpression "config.sops.secrets.\"kebnetrails.env\".path";
+        description = ''
+          systemd `EnvironmentFile` for the user unit, containing
+          `<apiKeyEnv>=<token>`. Required when the monitor is enabled. The
+          token is visible in the Falco process environment (same user).
+        '';
+      };
+      roeFile = mkOption {
+        type = types.nullOr (types.either types.path types.lines);
+        default = null;
+        description = ''
+          Rules of Engagement installed as `config/roe.md` (path or inline
+          text). With `mutableConfig = false` it is rewritten on every start;
+          with `mutableConfig = true` only when absent, so `premptictl roe set`
+          owns it afterwards. Required when the monitor is enabled unless
+          `mutableConfig` is set.
+        '';
+      };
+      timeoutMs = mkOption {
+        type = types.ints.positive;
+        default = 20000;
+        description = "Per-attempt HTTP timeout. The Claude Code hook timeout is derived from it.";
+      };
+      onError = mkOption {
+        type = types.enum [ "ask" "deny" ];
+        default = "ask";
+        description = "Verdict when the model cannot be reached or answers nonsense.";
+      };
+      maxTranscriptBytes = mkOption {
+        type = types.ints.unsigned;
+        default = 32768;
+        description = "Tail of the agent transcript forwarded as context (0 disables).";
+      };
+      maxInputBytes = mkOption {
+        type = types.ints.positive;
+        default = 8192;
+        description = "Bytes of serialized `tool_input` forwarded to the model.";
+      };
+      workers = mkOption {
+        type = types.ints.positive;
+        default = 4;
+        description = "Concurrent LLM calls.";
+      };
+      skipTools = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "Read" "Glob" "Grep" ];
+        description = "Tool names never sent to the model.";
+      };
+    };
+
     supervisor = {
       logRotateBytes = mkOption {
         type = types.ints.positive;
@@ -150,6 +242,18 @@ rec {
     };
   };
 
+  # Assertions shared by both modules.
+  mkAssertions = cfg: [
+    {
+      assertion = cfg.monitor.enable -> cfg.monitor.environmentFile != null;
+      message = "services.prempti.monitor.enable requires services.prempti.monitor.environmentFile (holds the API key).";
+    }
+    {
+      assertion = cfg.monitor.enable -> (cfg.monitor.roeFile != null || cfg.mutableConfig);
+      message = "services.prempti.monitor.enable requires services.prempti.monitor.roeFile, or mutableConfig = true and `premptictl roe set <file>`.";
+    }
+  ];
+
   # Build the ExecStartPre script for a resolved `cfg`.
   mkSetupScript = cfg:
     let
@@ -166,11 +270,33 @@ rec {
       # the generated (quoted) strings below still resolve at runtime.
       home = "\${HOME}/.prempti";
 
+      roeFile =
+        if cfg.monitor.roeFile == null then null
+        else if builtins.isPath cfg.monitor.roeFile || lib.isStorePath cfg.monitor.roeFile
+        then cfg.monitor.roeFile
+        else pkgs.writeText "prempti-roe.md" cfg.monitor.roeFile;
+
       initConfig = {
         mode = cfg.mode;
         default_action = cfg.defaultAction;
         socket_path = "${home}/run/broker.sock";
         http_port = cfg.httpPort;
+        audit_enabled = cfg.audit.enable;
+        audit_path = "${home}/log/audit.jsonl";
+        audit_input_max_bytes = cfg.audit.inputMaxBytes;
+        monitor = {
+          enabled = cfg.monitor.enable;
+          endpoint = cfg.monitor.endpoint;
+          model = cfg.monitor.model;
+          api_key_env = cfg.monitor.apiKeyEnv;
+          roe_path = "${home}/config/roe.md";
+          timeout_ms = cfg.monitor.timeoutMs;
+          on_error = cfg.monitor.onError;
+          max_transcript_bytes = cfg.monitor.maxTranscriptBytes;
+          max_input_bytes = cfg.monitor.maxInputBytes;
+          workers = cfg.monitor.workers;
+          skip_tools = cfg.monitor.skipTools;
+        };
       } // cfg.pluginSettings;
 
       fragment = lib.recursiveUpdate {
@@ -210,15 +336,23 @@ rec {
         stop_timeout_secs: ${toString cfg.supervisor.stopTimeoutSecs}
       '';
 
+      installRoe =
+        if roeFile == null then ""
+        else if cfg.mutableConfig
+        then ''[ -e "$prefix/config/roe.md" ] || install -m644 ${roeFile} "$prefix/config/roe.md"''
+        else ''install -m644 ${roeFile} "$prefix/config/roe.md"'';
+
       installConfig =
         if cfg.mutableConfig
         then ''
           [ -e "$prefix/config/falco.coding_agents_plugin.yaml" ] || install -m644 ${pluginConfig} "$prefix/config/falco.coding_agents_plugin.yaml"
           [ -e "$prefix/config/supervisor.yaml" ] || install -m644 ${supervisorConfig} "$prefix/config/supervisor.yaml"
+          ${installRoe}
         ''
         else ''
           install -m644 ${pluginConfig} "$prefix/config/falco.coding_agents_plugin.yaml"
           install -m644 ${supervisorConfig} "$prefix/config/supervisor.yaml"
+          ${installRoe}
         '';
     in
     pkgs.writeShellApplication {

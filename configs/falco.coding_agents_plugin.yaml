@@ -29,6 +29,32 @@ plugins:
       default_action: allow
       socket_path: ${HOME}/.prempti/run/broker.sock
       http_port: 2802
+      # Audit trail: one hash-chained JSON record per tool call.
+      # Verify with: premptictl audit verify
+      audit_enabled: true
+      audit_path: ${HOME}/.prempti/log/audit.jsonl
+      audit_input_max_bytes: 16384
+      # LLM monitor (Kebnetrails): a second verdict source that reviews
+      # every tool call against the Rules of Engagement in roe_path and
+      # can escalate to ask/deny. It never downgrades a Falco verdict.
+      # Requires the bearer token in the environment variable named by
+      # api_key_env (falls back to OPENAI_API_KEY) and a non-empty RoE.
+      # Manage with: premptictl roe set <file> / premptictl monitor status
+      monitor:
+        enabled: false
+        endpoint: https://api.deepseek.com/v1
+        model: deepseek-v4.1-flash
+        api_key_env: KEBNETRAILS_API_KEY
+        roe_path: ${HOME}/.prempti/config/roe.md
+        timeout_ms: 20000
+        # Verdict when the model cannot be reached or answers nonsense:
+        # ask (default) or deny.
+        on_error: ask
+        max_transcript_bytes: 32768
+        max_input_bytes: 8192
+        workers: 4
+        # Tools never sent to the model, e.g. [Read, Glob, Grep].
+        skip_tools: []
 
 load_plugins:
   - coding_agent

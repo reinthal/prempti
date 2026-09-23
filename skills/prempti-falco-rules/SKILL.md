@@ -44,6 +44,8 @@ Every tool call event exposes these fields for conditions and output:
 | `tool.patch_op` | string | Codex `apply_patch` operation: `Add`, `Update`, `Delete`, or `Move` (empty otherwise) |
 | `agent.permission_mode` | string | Session permission mode: `default`, `acceptEdits`, `plan`, `bypassPermissions` (Codex also emits `dontAsk`) |
 | `agent.transcript_path` | string | Session transcript file path (empty when the agent reports `null`) |
+| `agent.id` | string | Claude Code subagent instance identifier (empty for the main session / Codex) |
+| `agent.type` | string | Claude Code subagent type, e.g. `Explore`, `Plan` (empty for the main session / Codex) |
 
 Path fields come in raw/real pairs. Use `real_*` for path policy matching (resolved, absolute). Use raw fields for display. For policies based on a file name, match `tool.file_name` **or** `basename(tool.real_file_path)` so both sensitive symlink aliases and sensitive canonical targets are covered.
 

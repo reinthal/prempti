@@ -8,11 +8,13 @@ use falco_plugin::tables::TablesInput;
 use falco_plugin::{extract_plugin, plugin, source_plugin};
 
 mod apply_patch;
+mod audit;
 mod broker;
 mod config;
 mod event;
 mod extract;
 mod http_server;
+mod monitor;
 mod socket_server;
 mod source;
 mod verdict;
@@ -54,6 +56,9 @@ pub struct CodingAgentPlugin {
     /// Handle to the pending request reaper thread.
     #[allow(dead_code)]
     reaper_thread: Option<std::thread::JoinHandle<()>>,
+    /// LLM monitor worker pool (when enabled). Dropped last so the socket
+    /// thread's clone is gone and the queue can close.
+    monitor: Option<Arc<monitor::Monitor>>,
 }
 
 /// Plugin version pulled from `CARGO_PKG_VERSION` so the workspace `version`
@@ -107,6 +112,28 @@ impl Plugin for CodingAgentPlugin {
             }
         }
 
+        if config.monitor.enabled {
+            let m = &config.monitor;
+            if m.endpoint.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "monitor.enabled is true but monitor.endpoint is empty"
+                ));
+            }
+            if m.model.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "monitor.enabled is true but monitor.model is empty"
+                ));
+            }
+            match m.on_error.as_str() {
+                "ask" | "deny" => {}
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "invalid monitor.on_error '{other}': must be 'ask' or 'deny'"
+                    ));
+                }
+            }
+        }
+
         log::info!(
             "coding_agent plugin initialized (mode={}, default_action={}, socket_path={}, http_port={})",
             config.mode,
@@ -125,14 +152,41 @@ impl Plugin for CodingAgentPlugin {
         // defer), so setting it in those modes is a harmless no-op.
         broker.set_default_action(config.default_action == "defer");
 
+        // Audit trail. Fail-fast: a service that silently loses its audit
+        // records is worse than one that refuses to start.
+        if config.audit_enabled {
+            let sink =
+                audit::AuditSink::open(std::path::Path::new(&config.audit_path)).map_err(|e| {
+                    anyhow::anyhow!("failed to open audit file {}: {e}", config.audit_path)
+                })?;
+            broker.set_audit_sink(Arc::new(sink));
+        } else {
+            log::warn!("audit trail disabled (audit_enabled: false)");
+        }
+
+        // LLM monitor (second verdict source). Started before the socket
+        // server so no request can arrive without a monitor to hand it to.
+        // Its key / RoE / endpoint problems surface as init errors.
+        let monitor = if config.monitor.enabled {
+            let m = monitor::Monitor::start(&config.monitor, Arc::clone(&broker))?;
+            // Pending entries must outlive two attempts plus slack; the
+            // setter clamps to at least the default.
+            broker.set_pending_ttl_secs(2 * config.monitor.timeout_ms.div_ceil(1000) + 10);
+            Some(Arc::new(m))
+        } else {
+            None
+        };
+
         // Bring up the socket server first so its bind-time check cleanly
         // rejects a second Falco trying to share the same socket *before*
         // anything mutates shared state (stale socket file, HTTP port, etc).
         let socket_thread = Some(socket_server::start(
             config.socket_path.clone(),
             config.max_request_bytes,
+            config.audit_input_max_bytes as usize,
             event_tx,
             Arc::clone(&broker),
+            monitor.clone(),
         )?);
 
         // HTTP alert receiver. Port collisions surface as Err here rather
@@ -151,6 +205,7 @@ impl Plugin for CodingAgentPlugin {
             socket_thread,
             http_handle,
             reaper_thread,
+            monitor,
         })
     }
 
@@ -193,6 +248,11 @@ impl Drop for CodingAgentPlugin {
         if let Some(handle) = self.reaper_thread.take() {
             let _ = handle.join();
         }
+
+        // Close the monitor queue and join its workers. The socket thread
+        // is already gone, so this is the last Arc; in-flight HTTP calls
+        // finish (bounded by monitor.timeout_ms) or fail to on_error.
+        drop(self.monitor.take());
 
         log::info!("plugin shutdown complete");
     }

@@ -15,6 +15,8 @@ in
   options.services.prempti = common.options;
 
   config = lib.mkIf cfg.enable {
+    assertions = common.mkAssertions cfg;
+
     environment.systemPackages = [ cfg.package ];
 
     systemd.user.services.prempti = {
@@ -31,6 +33,8 @@ in
         ExecStart = "${cfg.package}/bin/premptictl daemon --prefix %h/.prempti";
         Restart = "on-failure";
         RestartSec = 5;
+        # LLM monitor API key. Falco inherits it from the supervisor.
+        EnvironmentFile = lib.mkIf (cfg.monitor.environmentFile != null) cfg.monitor.environmentFile;
       };
     };
   };

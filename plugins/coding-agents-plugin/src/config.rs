@@ -62,6 +62,177 @@ pub struct CodingAgentConfig {
     /// so a typo can't break the broker.
     #[serde(default = "default_max_request_bytes")]
     pub max_request_bytes: u64,
+
+    /// Write one hash-chained JSON record per interceptor request to
+    /// `audit_path`. Default true.
+    #[serde(default = "default_audit_enabled")]
+    pub audit_enabled: bool,
+
+    /// Audit trail file. Append-only; never rotated by the supervisor
+    /// (rotation would break the hash chain). Default
+    /// `$HOME/.prempti/log/audit.jsonl`.
+    #[serde(default = "default_audit_path")]
+    pub audit_path: String,
+
+    /// Maximum bytes of serialized `tool_input` stored verbatim in each audit
+    /// record. The sha256 of the full input is always recorded. Default 16 KiB.
+    #[serde(default = "default_audit_input_max_bytes")]
+    pub audit_input_max_bytes: u64,
+
+    /// LLM monitor (second verdict source). Disabled unless `monitor.enabled`.
+    #[serde(default)]
+    pub monitor: MonitorConfig,
+}
+
+/// LLM monitor settings. The monitor reviews every tool call (minus
+/// `skip_tools`) against the Rules of Engagement and can escalate the
+/// verdict to `ask` or `deny`; it can never downgrade a Falco verdict.
+#[derive(Deserialize, JsonSchema, Clone, Debug)]
+#[schemars(crate = "falco_plugin::schemars")]
+#[serde(crate = "falco_plugin::serde")]
+pub struct MonitorConfig {
+    /// Enable the monitor. Default false.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// OpenAI-compatible base URL, e.g. `https://api.deepseek.com/v1`.
+    /// The plugin POSTs to `<endpoint>/chat/completions`.
+    #[serde(default)]
+    pub endpoint: String,
+
+    /// Model name sent in the request body.
+    #[serde(default = "default_monitor_model")]
+    pub model: String,
+
+    /// Environment variable holding the bearer token. Read once at plugin
+    /// init. Falls back to `OPENAI_API_KEY`. Default `KEBNETRAILS_API_KEY`.
+    #[serde(default = "default_monitor_api_key_env")]
+    pub api_key_env: String,
+
+    /// Rules of Engagement document (free-form text / Markdown). Read once
+    /// at init; its sha256 is recorded in every audit record.
+    /// Default `$HOME/.prempti/config/roe.md`.
+    #[serde(default = "default_monitor_roe_path")]
+    pub roe_path: String,
+
+    /// Per-attempt HTTP timeout in milliseconds. Default 20000.
+    #[serde(default = "default_monitor_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Verdict when the monitor cannot produce one (transport error,
+    /// unparseable reply, panic): `ask` (default) or `deny`.
+    #[serde(default = "default_monitor_on_error")]
+    pub on_error: String,
+
+    /// Bytes read from the tail of the agent transcript for context.
+    /// 0 disables transcript context. Default 32 KiB.
+    #[serde(default = "default_monitor_max_transcript_bytes")]
+    pub max_transcript_bytes: u64,
+
+    /// Bytes of serialized `tool_input` forwarded to the model. Default 8 KiB.
+    #[serde(default = "default_monitor_max_input_bytes")]
+    pub max_input_bytes: u64,
+
+    /// Worker threads (concurrent LLM calls). Default 4.
+    #[serde(default = "default_monitor_workers")]
+    pub workers: usize,
+
+    /// Tool names never sent to the monitor (recorded as
+    /// `skipped:tool_policy`). Default empty — review everything.
+    #[serde(default)]
+    pub skip_tools: Vec<String>,
+}
+
+impl Default for MonitorConfig {
+    fn default() -> Self {
+        MonitorConfig {
+            enabled: false,
+            endpoint: String::new(),
+            model: default_monitor_model(),
+            api_key_env: default_monitor_api_key_env(),
+            roe_path: default_monitor_roe_path(),
+            timeout_ms: default_monitor_timeout_ms(),
+            on_error: default_monitor_on_error(),
+            max_transcript_bytes: default_monitor_max_transcript_bytes(),
+            max_input_bytes: default_monitor_max_input_bytes(),
+            workers: default_monitor_workers(),
+            skip_tools: Vec::new(),
+        }
+    }
+}
+
+fn default_monitor_model() -> String {
+    "deepseek-v4.1-flash".to_string()
+}
+
+fn default_monitor_api_key_env() -> String {
+    "KEBNETRAILS_API_KEY".to_string()
+}
+
+fn default_monitor_roe_path() -> String {
+    #[cfg(unix)]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{home}/.prempti/config/roe.md")
+        } else {
+            "/etc/prempti/roe.md".to_string()
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            format!("{}/prempti/config/roe.md", local.replace('\\', "/"))
+        } else {
+            "C:/prempti-roe.md".to_string()
+        }
+    }
+}
+
+fn default_monitor_timeout_ms() -> u64 {
+    20_000
+}
+
+fn default_monitor_on_error() -> String {
+    "ask".to_string()
+}
+
+fn default_monitor_max_transcript_bytes() -> u64 {
+    32 * 1024
+}
+
+fn default_monitor_max_input_bytes() -> u64 {
+    8 * 1024
+}
+
+fn default_monitor_workers() -> usize {
+    4
+}
+
+fn default_audit_enabled() -> bool {
+    true
+}
+
+fn default_audit_path() -> String {
+    #[cfg(unix)]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{home}/.prempti/log/audit.jsonl")
+        } else {
+            "/tmp/prempti-audit.jsonl".to_string()
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            format!("{}/prempti/log/audit.jsonl", local.replace('\\', "/"))
+        } else {
+            "C:/prempti-audit.jsonl".to_string()
+        }
+    }
+}
+
+fn default_audit_input_max_bytes() -> u64 {
+    16 * 1024
 }
 
 fn default_mode() -> String {

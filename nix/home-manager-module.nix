@@ -18,7 +18,7 @@ in
         assertion = pkgs.stdenv.isLinux;
         message = "services.prempti (home-manager) only supports Linux; use the upstream .pkg on macOS.";
       }
-    ];
+    ] ++ common.mkAssertions cfg;
 
     home.packages = [ cfg.package ];
 
@@ -34,6 +34,8 @@ in
         Restart = "on-failure";
         RestartSec = 5;
         Environment = [ "PATH=${lib.makeBinPath [ pkgs.systemd pkgs.coreutils ]}" ];
+        # LLM monitor API key. Falco inherits it from the supervisor.
+        EnvironmentFile = lib.mkIf (cfg.monitor.environmentFile != null) cfg.monitor.environmentFile;
       };
       Install.WantedBy = [ "default.target" ];
     };

@@ -93,7 +93,11 @@ struct HookSpecificOutput<'a> {
 
 const DEFAULT_TIMEOUT_MS: u64 = 5000;
 const TIMEOUT_MIN_MS: u64 = 100;
-const TIMEOUT_MAX_MS: u64 = 30000;
+// 10 minutes: matches Claude Code's default command-hook timeout. The LLM
+// monitor (and, later, human sign-off) can legitimately hold a verdict for
+// far longer than the 5 s rule-only default; `premptictl hook add` sets
+// `PREMPTI_TIMEOUT_MS` on the hook command to match the plugin config.
+const TIMEOUT_MAX_MS: u64 = 600_000;
 #[cfg(unix)]
 const SOCKET_SUFFIX: &str = "/.prempti/run/broker.sock";
 /// Default cap on stdin bytes read from the agent. 4 MiB comfortably covers
@@ -207,10 +211,7 @@ fn get_socket_path() -> String {
             return String::new();
         }
         // Use forward slashes — YAML configs and AF_UNIX paths must match exactly.
-        format!(
-            "{}/prempti/run/broker.sock",
-            base.replace('\\', "/")
-        )
+        format!("{}/prempti/run/broker.sock", base.replace('\\', "/"))
     }
 }
 
@@ -400,7 +401,10 @@ fn run() -> Result<(), Error> {
         return Err(Error::BrokerError("broker response ID mismatch".into()));
     }
 
-    if !matches!(response.decision.as_str(), "allow" | "deny" | "ask" | "defer") {
+    if !matches!(
+        response.decision.as_str(),
+        "allow" | "deny" | "ask" | "defer"
+    ) {
         return Err(Error::BrokerError("invalid broker decision".into()));
     }
 
