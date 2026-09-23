@@ -106,12 +106,12 @@ The installer copies all components to `~/.prempti/`, starts a systemd user serv
 
 ### NixOS / home-manager
 
-The repository is a Nix flake that builds Prempti and a patched pre-built Falco, and ships a NixOS module and a home-manager module. Both install the same per-user systemd unit the Linux installer would, regenerated from Nix options on every start (no `install.sh`, no files copied by hand).
+The prempti package can also be installed via a nix flakes. Using either home manager or Nixos Modules, the flake installs the same per-user systemd unit the Linux installer would. Instead of copying files with `install.sh`, the unit's `ExecStartPre` rebuilds `~/.prempti` from your Nix options on every start: symlinks into the Nix store for the binaries, generated config files, and links for the rule files.
 
-Add the flake as an input:
+Add the flake as an input to your `flake.nix`:
 
 ```nix
-inputs.prempti.url = "github:falcosecurity/prempti";   # or path:/path/to/checkout
+inputs.prempti.url = "github:falcosecurity/prempti";
 ```
 
 **home-manager** (one user):
@@ -145,7 +145,7 @@ inputs.prempti.url = "github:falcosecurity/prempti";   # or path:/path/to/checko
 }
 ```
 
-After `home-manager switch` / `nixos-rebuild switch` the unit is running and the hook is registered; `premptictl` is on your `PATH`, so the [Verify](#verify) and [Managing](#managing) sections apply unchanged. Options (`mode`, `defaultAction`, `httpPort`, `rules.<name>`, `mutableConfig`, supervisor rotation) are documented in [`nix/README.md`](nix/README.md).
+After `home-manager switch` / `nixos-rebuild switch` the unit is running and the hook is registered; `premptictl` is on your `PATH`, so the [Verify](#verify) and [Managing](#managing) sections apply unchanged. Configuration is done through options and a `switch`: `mode`, `defaultAction`, `httpPort`, `rules.<name>`, supervisor rotation, plus freeform `pluginSettings` (any `init_config` key) and `settings` (any top-level Falco key). All documented in [`nix/README.md`](nix/README.md).
 
 > [!NOTE]
 > The plugin config is regenerated from the Nix options on every service start, so `premptictl mode` / `premptictl default-action` edits do not survive a restart unless you set `services.prempti.mutableConfig = true`. Every `switch` that changes the unit restarts it; the supervisor removes the hook on stop and re-adds it on start, so that short window is unmonitored rather than fail-closed.

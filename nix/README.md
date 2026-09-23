@@ -62,12 +62,39 @@ Exposes Prempti as a NixOS / home-manager service. Linux only (x86_64, aarch64).
 | `mode` | `guardrails` | Written into `falco.coding_agents_plugin.yaml` |
 | `defaultAction` | `allow` | No-rule-match floor (guardrails only) |
 | `httpPort` | `2802` | Loopback alert port |
+| `pluginSettings` | `{}` | Extra `init_config` keys (e.g. `deny_tags`, `max_request_bytes`); wins over the dedicated options |
+| `settings` | `{}` | Extra top-level Falco keys in the generated fragment; override `falco.yaml` scalars (e.g. `log_level`) |
 | `mutableConfig` | `false` | See below |
 | `defaultRules.enable` | `true` | Ship upstream ruleset |
 | `rules.<name>` | `{}` | Inline YAML or path → `rules/user/nix-<name>.yaml` |
 | `supervisor.logRotateBytes` | `10485760` | |
 | `supervisor.logRotateKeep` | `3` | |
 | `supervisor.stopTimeoutSecs` | `20` | |
+
+## Changing configuration
+
+Everything is driven by options; edit your NixOS / home-manager config and
+`switch`. For anything without a dedicated option use the two freeform
+attrsets, rendered into `falco.coding_agents_plugin.yaml` with
+`pkgs.formats.yaml`:
+
+```nix
+services.prempti = {
+  mode = "guardrails";
+  pluginSettings = {
+    ask_tags = [ "coding_agent_ask" "team_ask" ];   # init_config keys
+  };
+  settings = {
+    log_level = "info";                              # top-level Falco keys
+    outputs_queue.capacity = 0;
+  };
+  rules.team = ./rules/team.yaml;                    # rules/user/nix-team.yaml
+};
+```
+
+`settings` keys land in the fragment that Falco loads after `falco.yaml`
+(`config_files`), so scalars there override the base config. Hand-written
+files in `rules/user/` are never touched.
 
 ## How it maps onto upstream's layout
 

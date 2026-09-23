@@ -51,6 +51,8 @@
                 services.prempti = {
                   enable = true;
                   mode = "monitor";
+                pluginSettings.deny_tags = [ "coding_agent_deny" "team_deny" ];
+                settings.log_level = "info";
                   rules.example = ''
                     - rule: Deny git push
                       desc: test
