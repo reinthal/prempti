@@ -16,7 +16,7 @@ Exposes Prempti as a NixOS / home-manager service. Linux only (x86_64, aarch64).
 
 ```nix
 {
-  inputs.prempti.url = "github:reinthal/prempti";   # or path:/path/to/checkout
+  inputs.prempti.url = "github:falcosecurity/prempti";   # or path:/path/to/checkout
 
   outputs = { nixpkgs, prempti, ... }: {
     nixosConfigurations.host = nixpkgs.lib.nixosSystem {

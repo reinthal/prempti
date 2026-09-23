@@ -104,6 +104,52 @@ bash install.sh
 
 The installer copies all components to `~/.prempti/`, starts a systemd user service, and registers the hook automatically.
 
+### NixOS / home-manager
+
+The repository is a Nix flake that builds Prempti and a patched pre-built Falco, and ships a NixOS module and a home-manager module. Both install the same per-user systemd unit the Linux installer would, regenerated from Nix options on every start (no `install.sh`, no files copied by hand).
+
+Add the flake as an input:
+
+```nix
+inputs.prempti.url = "github:falcosecurity/prempti";   # or path:/path/to/checkout
+```
+
+**home-manager** (one user):
+
+```nix
+{ inputs, ... }: {
+  imports = [ inputs.prempti.homeManagerModules.prempti ];
+  services.prempti.enable = true;
+}
+```
+
+**NixOS** (every user on the host gets the unit):
+
+```nix
+{ inputs, ... }: {
+  imports = [ inputs.prempti.nixosModules.prempti ];
+  services.prempti = {
+    enable = true;
+    mode = "guardrails";        # guardrails | monitor | passthrough
+    defaultAction = "allow";    # allow | defer
+    rules.no-git-push = ''
+      - rule: Deny git push
+        desc: Never push from an agent session
+        condition: tool.name = "Bash" and tool.input_command startswith "git push"
+        output: Falco blocked git push (%tool.input_command)
+        priority: CRITICAL
+        source: coding_agent
+        tags: [coding_agent_deny]
+    '';
+  };
+}
+```
+
+After `home-manager switch` / `nixos-rebuild switch` the unit is running and the hook is registered; `premptictl` is on your `PATH`, so the [Verify](#verify) and [Managing](#managing) sections apply unchanged. Options (`mode`, `defaultAction`, `httpPort`, `rules.<name>`, `mutableConfig`, supervisor rotation) are documented in [`nix/README.md`](nix/README.md).
+
+> [!NOTE]
+> The plugin config is regenerated from the Nix options on every service start, so `premptictl mode` / `premptictl default-action` edits do not survive a restart unless you set `services.prempti.mutableConfig = true`. Every `switch` that changes the unit restarts it; the supervisor removes the hook on stop and re-adds it on start, so that short window is unmonitored rather than fail-closed.
+
 ### Windows
 
 From the [latest release](https://github.com/falcosecurity/prempti/releases/latest), download the `.msi` for your CPU architecture and double-click it (or run `msiexec /i prempti-<version>-windows-<arch>.msi`).
@@ -274,6 +320,7 @@ The skill guides Claude through writing the rule, placing it in the right direct
 | Agent | Platform | Status |
 |-------|----------|--------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Linux (x86_64, aarch64) | Supported |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | NixOS / home-manager (x86_64, aarch64) | Supported via flake |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | macOS (Apple Silicon, Intel) | Supported |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Windows (x86_64, ARM64) | Supported |
 | [Codex](https://openai.com/index/codex/) | Linux | Experimental |
