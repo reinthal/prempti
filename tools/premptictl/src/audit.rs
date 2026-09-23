@@ -34,6 +34,11 @@ pub fn print_usage() {
     eprintln!(
         "                     --json          raw JSON lines instead of the one-line summary"
     );
+    eprintln!("  premptictl audit serve [--addr HOST:PORT]");
+    eprintln!("                                     Serve a live web UI for the audit trail");
+    eprintln!(
+        "                                     (default: {DEFAULT_SERVE_ADDR}, loopback only)"
+    );
 }
 
 pub fn cli(prefix: &Path, args: &[&str]) {
@@ -41,6 +46,15 @@ pub fn cli(prefix: &Path, args: &[&str]) {
         ["verify"] => verify(prefix),
         ["tail", rest @ ..] => match parse_tail_args(rest) {
             Ok(opts) => tail(prefix, &opts),
+            Err(e) => {
+                eprintln!("{e}");
+                eprintln!();
+                print_usage();
+                process::exit(2);
+            }
+        },
+        ["serve", rest @ ..] => match parse_serve_args(rest) {
+            Ok(addr) => serve(prefix, &addr),
             Err(e) => {
                 eprintln!("{e}");
                 eprintln!();
@@ -400,10 +414,235 @@ pub fn format_ts_ms(ms: u64) -> String {
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{sec:02}Z")
 }
 
+// ---------------------------------------------------------------------------
+// serve: loopback web UI
+// ---------------------------------------------------------------------------
+
+const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:2803";
+/// Single-page UI, embedded so the binary stays self-contained.
+const UI_HTML: &str = include_str!("audit_ui.html");
+/// Cap on records returned by one `/api/records` call (the UI pages via `since`).
+const SERVE_MAX_RECORDS: usize = 2000;
+
+fn parse_serve_args(args: &[&str]) -> Result<String, String> {
+    let mut addr = DEFAULT_SERVE_ADDR.to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--addr" => {
+                i += 1;
+                addr = args
+                    .get(i)
+                    .ok_or_else(|| "--addr requires a value".to_string())?
+                    .to_string();
+            }
+            a if a.starts_with("--addr=") => addr = a["--addr=".len()..].to_string(),
+            a => return Err(format!("unknown audit serve flag: {a}")),
+        }
+        i += 1;
+    }
+    if !is_loopback_addr(&addr) {
+        return Err(format!(
+            "refusing to bind {addr}: the audit trail contains tool inputs; serve on loopback only"
+        ));
+    }
+    Ok(addr)
+}
+
+fn is_loopback_addr(addr: &str) -> bool {
+    addr.starts_with("127.") || addr.starts_with("localhost:") || addr.starts_with("[::1]:")
+}
+
+fn serve(prefix: &Path, addr: &str) {
+    let path = audit_path(prefix);
+    let server = tiny_http::Server::http(addr).unwrap_or_else(|e| {
+        eprintln!("cannot bind {addr}: {e}");
+        process::exit(1);
+    });
+    println!("Audit UI: http://{addr}/  (reading {})", path.display());
+    println!("Read-only, loopback only. Ctrl-C to stop.");
+    for req in server.incoming_requests() {
+        let url = req.url().to_string();
+        let (status, ctype, body) = route(&path, &url);
+        let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
+            .expect("static header");
+        let response = tiny_http::Response::from_string(body)
+            .with_status_code(status)
+            .with_header(header);
+        let _ = req.respond(response);
+    }
+}
+
+/// Dispatch one request path (with optional query) to `(status, content type, body)`.
+fn route(path: &Path, url: &str) -> (u16, &'static str, String) {
+    let (route, query) = url.split_once('?').unwrap_or((url, ""));
+    match route {
+        "/" | "/index.html" => (200, "text/html; charset=utf-8", UI_HTML.to_string()),
+        "/api/records" => {
+            let since = query_param(query, "since")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0u64);
+            let limit = query_param(query, "limit")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(SERVE_MAX_RECORDS)
+                .min(SERVE_MAX_RECORDS);
+            (200, "application/json", records_since(path, since, limit))
+        }
+        "/api/verify" => (200, "application/json", verify_json(path)),
+        _ => (404, "text/plain; charset=utf-8", "not found".to_string()),
+    }
+}
+
+fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then_some(v)
+    })
+}
+
+/// JSON array of the records with `seq > since`, keeping the newest `limit`.
+/// Lines are passed through verbatim (they are already canonical JSON).
+fn records_since(path: &Path, since: u64, limit: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty() && seq_of(l) > since)
+        .collect();
+    if lines.len() > limit {
+        lines.drain(..lines.len() - limit);
+    }
+    format!("[{}]", lines.join(","))
+}
+
+/// Pull `seq` out of a canonical record line without a full parse; falls
+/// back to serde for anything unexpected.
+fn seq_of(line: &str) -> u64 {
+    if let Some(idx) = line.find("\"seq\":") {
+        let digits: String = line[idx + 6..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(n) = digits.parse() {
+            return n;
+        }
+    }
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|v| v["seq"].as_u64())
+        .unwrap_or(0)
+}
+
+fn verify_json(path: &Path) -> String {
+    let result = match File::open(path) {
+        Ok(f) => verify_reader(BufReader::new(f)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ChainReport {
+            records: 0,
+            last_seq: 0,
+            last_hash: GENESIS_HASH.to_string(),
+        }),
+        Err(e) => Err((0, e.to_string())),
+    };
+    match result {
+        Ok(r) => serde_json::json!({
+            "ok": true, "records": r.records, "last_seq": r.last_seq, "last_hash": r.last_hash,
+        }),
+        Err((line, error)) => serde_json::json!({ "ok": false, "line": line, "error": error }),
+    }
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    fn temp_audit(lines: &[String]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ctl-audit-serve-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("audit-{}.jsonl", lines.len()));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn route_serves_ui_and_404() {
+        let path = temp_audit(&[]);
+        let (status, ctype, body) = route(&path, "/");
+        assert_eq!(status, 200);
+        assert!(ctype.starts_with("text/html"));
+        assert!(body.contains("<title>Prempti audit trail</title>"));
+        assert!(body.contains("api/records"));
+        assert_eq!(route(&path, "/nope").0, 404);
+    }
+
+    #[test]
+    fn records_since_filters_and_limits() {
+        let path = temp_audit(&chain(5));
+        let all: Vec<serde_json::Value> =
+            serde_json::from_str(&records_since(&path, 0, 100)).unwrap();
+        assert_eq!(all.len(), 5);
+        let newer: Vec<serde_json::Value> =
+            serde_json::from_str(&records_since(&path, 3, 100)).unwrap();
+        assert_eq!(
+            newer
+                .iter()
+                .map(|r| r["seq"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![4, 5]
+        );
+        let capped: Vec<serde_json::Value> =
+            serde_json::from_str(&records_since(&path, 0, 2)).unwrap();
+        assert_eq!(
+            capped
+                .iter()
+                .map(|r| r["seq"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![4, 5]
+        );
+        let via_route = route(&path, "/api/records?since=4&limit=10").2;
+        let v: Vec<serde_json::Value> = serde_json::from_str(&via_route).unwrap();
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn verify_json_reports_ok_missing_and_broken() {
+        let ok: serde_json::Value =
+            serde_json::from_str(&verify_json(&temp_audit(&chain(3)))).unwrap();
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["records"], 3);
+        let missing: serde_json::Value =
+            serde_json::from_str(&verify_json(Path::new("/nonexistent/audit.jsonl"))).unwrap();
+        assert_eq!(missing["ok"], true);
+        assert_eq!(missing["records"], 0);
+        let mut lines = chain(3);
+        lines[1] = lines[1].replace("echo x2", "echo y2");
+        let broken: serde_json::Value =
+            serde_json::from_str(&verify_json(&temp_audit(&lines))).unwrap();
+        assert_eq!(broken["ok"], false);
+        assert_eq!(broken["line"], 2);
+    }
+
+    #[test]
+    fn serve_args_default_and_loopback_guard() {
+        assert_eq!(parse_serve_args(&[]).unwrap(), DEFAULT_SERVE_ADDR);
+        assert_eq!(
+            parse_serve_args(&["--addr", "127.0.0.1:9000"]).unwrap(),
+            "127.0.0.1:9000"
+        );
+        assert_eq!(
+            parse_serve_args(&["--addr=localhost:9000"]).unwrap(),
+            "localhost:9000"
+        );
+        assert!(parse_serve_args(&["--addr", "0.0.0.0:9000"]).is_err());
+        assert!(parse_serve_args(&["--bogus"]).is_err());
+    }
+
+    #[test]
+    fn seq_of_fast_path_and_fallback() {
+        assert_eq!(seq_of(r#"{"a":1,"seq":42,"z":0}"#), 42);
+        assert_eq!(seq_of(r#"{  "seq" : 7 }"#), 7);
+        assert_eq!(seq_of("garbage"), 0);
+    }
 
     fn record(seq: u64, prev: &str, extra: &str) -> (String, String) {
         let body: serde_json::Value = serde_json::from_str(&format!(

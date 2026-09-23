@@ -899,6 +899,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tiny_http",
  "uds_windows",
  "windows-sys 0.59.0",
 ]
